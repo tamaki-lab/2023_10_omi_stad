@@ -10,6 +10,7 @@ from typing import Iterable
 import torch
 
 import util.misc as utils
+from util.plot_utils import plot_frame_boxes, plot_clip_boxes
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
 
@@ -87,7 +88,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        targets = [[{k: v.to(device) for k, v in t.items()} for t in vtgt] for vtgt in targets]
+        targets = [t for vtgt in targets for t in vtgt]
+        b, c, t, h, w = samples.size()
+        samples = samples.permute(0, 2, 1, 3, 4)
+        samples = samples.reshape(b * t, c, h, w)
 
         outputs = model(samples)
         loss_dict = criterion(outputs, targets)
@@ -104,14 +110,21 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                              **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
 
-        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
         if 'segm' in postprocessors.keys():
             target_sizes = torch.stack([t["size"] for t in targets], dim=0)
             results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes)
-        res = {target['image_id'].item(): output for target, output in zip(targets, results)}
-        if coco_evaluator is not None:
-            coco_evaluator.update(res)
+        # res = {target['image_id'].item(): output for target, output in zip(targets, results)}
+        # if coco_evaluator is not None:
+        #     coco_evaluator.update(res)
+
+        # plot
+        # plot_frame_boxes(samples[0], results[0])
+        plot_clip_boxes(samples[0:t], results[0:t])
+        # plot_frame_boxes(samples.tensors[0], results[0])
+        continue
 
         if panoptic_evaluator is not None:
             res_pano = postprocessors["panoptic"](outputs, target_sizes, orig_target_sizes)
