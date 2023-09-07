@@ -43,6 +43,7 @@ def video_decorder_for_detr(
     for i in range(nf):
         label[i]["boxes"] = torch.Tensor(bbox_anno[i][:, :4])
         label[i]["labels"] = torch.Tensor(bbox_anno[i][:, 4]).to(torch.int64)
+        label[i]["person_id"] = torch.Tensor(bbox_anno[i][:, 5]).to(torch.int64)
         label[i]["orig_size"] = torch.as_tensor([int(512), int(512)])
         label[i]["size"] = torch.as_tensor([int(512), int(512)])
 
@@ -129,12 +130,13 @@ def get_clip_label(
     """
     label = []
     for f_idx in frame_indices_list:
-        annotations = np.zeros((0, 5))
+        annotations = np.zeros((0, 6))
         if str(f_idx) in bbox_ano:
-            for _, one_bbox_ano in bbox_ano[str(f_idx)].items():
-                annotation = np.zeros((1, 5))
-                annotation[0, :] = one_bbox_ano
+            for obj_id, one_bbox_ano in bbox_ano[str(f_idx)].items():
+                annotation = np.zeros((1, 6))  # [x,y,x,y,class_id, person_id]
+                annotation[0, :5] = one_bbox_ano
                 annotation[0, :4] *= scale
+                annotation[0, 5] = int(obj_id)
                 annotations = np.append(annotations, annotation, axis=0)
         label.append(annotations)
     return label

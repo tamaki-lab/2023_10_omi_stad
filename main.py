@@ -1,10 +1,12 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+from comet_ml import Experiment
 import argparse
 import datetime
 import json
 import random
 import time
 from pathlib import Path
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -16,6 +18,7 @@ import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
+from models.person_encoder import PersonEncoder, SetInfoNce
 
 
 def get_args_parser():
@@ -100,17 +103,15 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
-    parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24/train', type=str)
+    parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
     return parser
 
 
 def main(args):
-    utils.init_distributed_mode(args)
-    print("git:\n  {}\n".format(utils.get_sha()))
-
-    if args.frozen_weights is not None:
-        assert args.masks, "Frozen training is meant for segmentation only"
-    print(args)
+    ex = Experiment(
+        project_name="stal",
+        workspace="kazukiomi",
+    )
 
     device = torch.device(args.device)
 
@@ -122,83 +123,48 @@ def main(args):
 
     model, criterion, postprocessors = build_model(args)
     model.to(device)
+    model.eval()
+    criterion.eval()
 
     model_without_ddp = model
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        model_without_ddp = model.module
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
+    psn_encoder = PersonEncoder().to(device)
+    psn_criterion = SetInfoNce().to(device)
 
-    param_dicts = [
-        {"params": [p for n, p in model_without_ddp.named_parameters() if "backbone" not in n and p.requires_grad]},
-        {
-            "params": [p for n, p in model_without_ddp.named_parameters() if "backbone" in n and p.requires_grad],
-            "lr": args.lr_backbone,
-        },
-    ]
-    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
-                                  weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    dataset_train = build_dataset(image_set='train', args=args)
-    dataset_val = build_dataset(image_set='val', args=args)
-
-    if args.distributed:
-        sampler_train = DistributedSampler(dataset_train)
-        sampler_val = DistributedSampler(dataset_val, shuffle=False)
-    else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-
-    batch_sampler_train = torch.utils.data.BatchSampler(
-        sampler_train, args.batch_size, drop_last=True)
-
-    data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
-                                   collate_fn=utils.collate_fn, num_workers=args.num_workers)
-    # data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
-    #                              drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
-    data_loader_val = get_loader(shard_path=args.shards_path, batch_size=2, clip_frames=8, sampling_rate=1)
-
-    if args.dataset_file == "coco_panoptic":
-        # We also evaluate AP during panoptic training, on original coco DS
-        coco_val = datasets.coco.build("val", args)
-        base_ds = get_coco_api_from_dataset(coco_val)
-    else:
-        base_ds = get_coco_api_from_dataset(dataset_val)
-
-    if args.frozen_weights is not None:
-        checkpoint = torch.load(args.frozen_weights, map_location='cpu')
-        model_without_ddp.detr.load_state_dict(checkpoint['model'])
+    data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=4, clip_frames=4, sampling_rate=1)
+    data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=4, clip_frames=4, sampling_rate=1)
 
     output_dir = Path(args.output_dir)
-    if args.resume:
-        if args.resume.startswith('https'):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                args.resume, map_location='cpu', check_hash=True)
-        else:
-            checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            args.start_epoch = checkpoint['epoch'] + 1
+
+    checkpoint = torch.hub.load_state_dict_from_url(args.resume, map_location='cpu', check_hash=True)
+    model_without_ddp.load_state_dict(checkpoint['model'])
+
+    train_log = {"psn_loss": utils.AverageMeter()}
+    val_log = {"psn_loss": utils.AverageMeter()}
 
     if args.eval:
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
-        if args.output_dir:
-            utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
-        return
+        evaluate(
+            model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
+        )
+        ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
+        val_log["psn_loss"].reset()
+        #     return
 
     print("Start training")
     start_time = time.time()
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            sampler_train.set_epoch(epoch)
-        train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
-            args.clip_max_norm)
+    pbar_epoch = tqdm(range(1, args.epochs))
+    for epoch in pbar_epoch:
+        pbar_epoch.set_description(f"[Epoch {epoch}]")
+        train_one_epoch(
+            model, criterion, data_loader_train, optimizer, device, psn_encoder, psn_criterion, train_log, ex)
+
+        ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=epoch)
+
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
@@ -214,33 +180,33 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
-        test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+        evaluate(
+            model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
         )
+        ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=epoch)
 
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
+        train_log["psn_loss"].reset()
+        val_log["psn_loss"].reset()
 
-        if args.output_dir and utils.is_main_process():
-            with (output_dir / "log.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
+        # log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+        #              **{f'test_{k}': v for k, v in test_stats.items()},
+        #              'epoch': epoch,
+        #              'n_parameters': n_parameters}
 
-            # for evaluation logs
-            if coco_evaluator is not None:
-                (output_dir / 'eval').mkdir(exist_ok=True)
-                if "bbox" in coco_evaluator.coco_eval:
-                    filenames = ['latest.pth']
-                    if epoch % 50 == 0:
-                        filenames.append(f'{epoch:03}.pth')
-                    for name in filenames:
-                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
-                                   output_dir / "eval" / name)
+        # if args.output_dir and utils.is_main_process():
+        #     with (output_dir / "log.txt").open("a") as f:
+        #         f.write(json.dumps(log_stats) + "\n")
 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+        # for evaluation logs
+        # if coco_evaluator is not None:
+        #     (output_dir / 'eval').mkdir(exist_ok=True)
+        #     if "bbox" in coco_evaluator.coco_eval:
+        #         filenames = ['latest.pth']
+        #         if epoch % 50 == 0:
+        #             filenames.append(f'{epoch:03}.pth')
+        #         for name in filenames:
+        #             torch.save(coco_evaluator.coco_eval["bbox"].eval,
+        #                        output_dir / "eval" / name)
 
 
 if __name__ == '__main__':
