@@ -25,9 +25,9 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
-    parser.add_argument('--batch_size', default=2, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=300, type=int)
+    parser.add_argument('--epochs', default=5, type=int)
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
@@ -65,7 +65,7 @@ def get_args_parser():
                         help="Train segmentation head if the flag is provided")
 
     # Loss
-    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
+    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_true',
                         help="Disables auxiliary decoding losses (loss at each layer)")
     # * Matcher
     parser.add_argument('--set_cost_class', default=1, type=float,
@@ -90,10 +90,11 @@ def get_args_parser():
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
+    parser.add_argument('--device', default=0, type=int)
+    # parser.add_argument('--device', default='cuda',
+    #                     help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--resume', default='https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
@@ -104,16 +105,13 @@ def get_args_parser():
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
+    parser.add_argument('--ex_name', default='test_ex', type=str)
+    parser.add_argument('--n_frames', default=8, type=int)
     return parser
 
 
 def main(args):
-    ex = Experiment(
-        project_name="stal",
-        workspace="kazukiomi",
-    )
-
-    device = torch.device(args.device)
+    device = torch.device(f"cuda:{args.device}")
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -136,34 +134,59 @@ def main(args):
     optimizer = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=4, clip_frames=4, sampling_rate=1)
-    data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=4, clip_frames=4, sampling_rate=1)
+    data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1)
+    data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1)
 
     output_dir = Path(args.output_dir)
 
     checkpoint = torch.hub.load_state_dict_from_url(args.resume, map_location='cpu', check_hash=True)
     model_without_ddp.load_state_dict(checkpoint['model'])
 
-    train_log = {"psn_loss": utils.AverageMeter()}
-    val_log = {"psn_loss": utils.AverageMeter()}
+    train_log = {"psn_loss": utils.AverageMeter(),
+                 "diff_psn_score": utils.AverageMeter(),
+                 "same_psn_score": utils.AverageMeter(),
+                 "total_psn_score": utils.AverageMeter()}
+    val_log = {"psn_loss": utils.AverageMeter(),
+               "diff_psn_score": utils.AverageMeter(),
+               "same_psn_score": utils.AverageMeter(),
+               "total_psn_score": utils.AverageMeter()}
 
-    if args.eval:
-        evaluate(
-            model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
-        )
-        ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
-        val_log["psn_loss"].reset()
-        #     return
+    ex = Experiment(
+        project_name="stal",
+        workspace="kazukiomi",
+    )
+    hyper_params = {
+        "ex_name": args.ex_name,
+        "optimizer": str(type(optimizer)).split("class")[-1][2:-2],
+        "learning late": args.lr,
+        "batch_size": args.batch_size,
+        "n_frames": args.n_frames,
+    }
+    ex.log_parameters(hyper_params)
+
+    # log loss before training
+    evaluate(
+        model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
+    )
+    ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
+    ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=0)
+    ex.log_metric("epoch_val_same_psn_score", val_log["same_psn_score"].avg, step=0)
+    ex.log_metric("epoch_val_total_psn_score", val_log["total_psn_score"].avg, step=0)
+    [val_log[key].reset() for key in val_log.keys()]
 
     print("Start training")
-    start_time = time.time()
-    pbar_epoch = tqdm(range(1, args.epochs))
+
+    pbar_epoch = tqdm(range(1, args.epochs + 1))
     for epoch in pbar_epoch:
         pbar_epoch.set_description(f"[Epoch {epoch}]")
         train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, psn_encoder, psn_criterion, train_log, ex)
+            model, criterion, data_loader_train, optimizer, device, epoch,
+            psn_encoder, psn_criterion, train_log, ex)
 
         ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=epoch)
+        ex.log_metric("epoch_train_diff_psn_score", train_log["diff_psn_score"].avg, step=epoch)
+        ex.log_metric("epoch_train_same_psn_score", train_log["same_psn_score"].avg, step=epoch)
+        ex.log_metric("epoch_train_total_psn_score", train_log["total_psn_score"].avg, step=epoch)
 
         lr_scheduler.step()
         if args.output_dir:
@@ -184,9 +207,12 @@ def main(args):
             model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
         )
         ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=epoch)
+        ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=epoch)
+        ex.log_metric("epoch_val_same_psn_score", val_log["same_psn_score"].avg, step=epoch)
+        ex.log_metric("epoch_val_total_psn_score", val_log["total_psn_score"].avg, step=epoch)
 
-        train_log["psn_loss"].reset()
-        val_log["psn_loss"].reset()
+        [train_log[key].reset() for key in train_log.keys()]
+        [val_log[key].reset() for key in val_log.keys()]
 
         # log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
         #              **{f'test_{k}': v for k, v in test_stats.items()},
