@@ -48,6 +48,9 @@ def video_decorder_for_detr(
         label[i]["orig_size"] = torch.as_tensor([int(512), int(512)])
         label[i]["size"] = torch.as_tensor([int(512), int(512)])
 
+        label[i]["boxes"] = xyxy2cxcywh(label[i]["boxes"])
+        label[i]["boxes"] = box_normalize(label[i]["boxes"], label[i]["size"])
+
     is_org_label = [True for _ in range(nf)]  # ucf and jhmdb are laebed all frames
 
     label = (label, is_org_label)
@@ -55,7 +58,21 @@ def video_decorder_for_detr(
     return new_clip, label
 
 
+def xyxy2cxcywh(boxes: torch.Tensor):
+    x0, y0, x1, y1 = boxes.unbind(-1)
+    b = [(x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0), (y1 - y0)]
+    return torch.stack(b, dim=-1)
+
+
+def box_normalize(boxes: torch.Tensor, size: torch.Tensor):
+    img_h, img_w = size.unbind(-1)
+    boxes = boxes / torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
+    return boxes
+
+
 # https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch/blob/15403b5371a64defb2a7c74e162c6e880a7f462c/efficientdet/dataset.py#L110
+
+
 def resize(clip: list, img_size=512) -> Tuple[torch.Tensor, float]:
     height, width, _ = np.array(clip[0]).shape
     if height > width:

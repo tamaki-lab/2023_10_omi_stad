@@ -109,7 +109,7 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
         pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
-        # continue
+        continue
         orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)

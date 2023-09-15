@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path, PurePath
 
+from .box_ops import box_unnormalize, box_cxcywh_to_xyxy
+
 
 def plot_logs(logs, fields=('class_error', 'loss_bbox_unscaled', 'mAP'), ewm_col=0, log_name='log.txt'):
     '''
@@ -152,6 +154,8 @@ def plot_label_clip_boxes(clip_sample, labels):
         img = img.numpy()
 
         img = np.clip(img * 255, a_min=0, a_max=255).astype(np.uint8).copy()
+        labels[t]["boxes"] = box_unnormalize(labels[t]["boxes"].cpu(), labels[t]["size"])
+        labels[t]["boxes"] = box_cxcywh_to_xyxy(labels[t]["boxes"])
         for i, box in enumerate(labels[t]["boxes"]):
             x1, y1, x2, y2 = box.unbind()
             cv2.rectangle(
