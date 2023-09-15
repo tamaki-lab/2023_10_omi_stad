@@ -42,7 +42,8 @@ def video_decorder_for_detr(
     bbox_anno = get_clip_label(bbox_ano, frame_indices_list, scale)
     for i in range(nf):
         label[i]["boxes"] = torch.Tensor(bbox_anno[i][:, :4])
-        label[i]["labels"] = torch.Tensor(bbox_anno[i][:, 4]).to(torch.int64)
+        label[i]["action_labels"] = torch.Tensor(bbox_anno[i][:, 4]).to(torch.int64)
+        label[i]["labels"] = torch.ones(bbox_anno[i].shape[0], dtype=torch.int64)   # object class (id of person class in detr is 1)
         label[i]["person_id"] = torch.Tensor(bbox_anno[i][:, 5]).to(torch.int64)
         label[i]["orig_size"] = torch.as_tensor([int(512), int(512)])
         label[i]["size"] = torch.as_tensor([int(512), int(512)])

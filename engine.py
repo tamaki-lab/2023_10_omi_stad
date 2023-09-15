@@ -12,7 +12,7 @@ from tqdm import tqdm
 import torch
 
 import util.misc as utils
-from util.plot_utils import plot_frame_boxes, plot_clip_boxes, plot_person_link
+from util.plot_utils import plot_label_clip_boxes, plot_pred_clip_boxes, plot_pred_person_link
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
 from models.person_encoder import make_same_person_list
@@ -109,7 +109,7 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
         pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
-        continue
+        # continue
         orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
@@ -121,9 +121,9 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
         #     coco_evaluator.update(res)
 
         # plot
-        # plot_frame_boxes(samples[0], results[0])
-        # plot_clip_boxes(samples[0:t], results[0:t])
-        plot_person_link(samples[0:t], results[0:t], same_person_idx_lists[0])
+        plot_label_clip_boxes(samples[0:t], targets[0:t])
+        plot_pred_clip_boxes(samples[0:t], results[0:t])
+        plot_pred_person_link(samples[0:t], results[0:t], same_person_idx_lists[0])
 
         # plot_frame_boxes(samples.tensors[0], results[0])
         continue

@@ -142,7 +142,48 @@ def plot_frame_boxes(sample, result):
     plt.savefig("test.png")
 
 
-def plot_clip_boxes(clip_sample, results):
+def plot_label_clip_boxes(clip_sample, labels):
+    frame_list = []
+    for t in range(len(labels)):
+        img = clip_sample[t].permute(1, 2, 0).cpu()
+        mean = torch.tensor([0.485, 0.456, 0.406])
+        std = torch.tensor([0.229, 0.224, 0.225])
+        img = img * std + mean
+        img = img.numpy()
+
+        img = np.clip(img * 255, a_min=0, a_max=255).astype(np.uint8).copy()
+        for i, box in enumerate(labels[t]["boxes"]):
+            x1, y1, x2, y2 = box.unbind()
+            cv2.rectangle(
+                img,
+                pt1=(int(x1.item()), int(y1.item())),
+                pt2=(int(x2.item()), int(y2.item())),
+                color=(0, 255, 0),
+                thickness=2,
+                lineType=cv2.LINE_4,
+                shift=0,
+            )
+        frame_list.append(img)
+
+    rows = 1
+    cols = 8
+    frame_id = 0
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4), squeeze=False, tight_layout=True)
+    for i in range(rows):
+        for j in range(cols):
+            img = frame_list[frame_id]
+            subplot_title = "frame:" + str(frame_id)
+            axes[i, j].set_title(subplot_title)
+            axes[i, j].imshow(img)
+            frame_id = frame_id + 1
+
+    plt.imshow(img)
+    os.makedirs("test_img", exist_ok=True)
+    plt.savefig("test_img/test_0.png")
+    plt.close()
+
+
+def plot_pred_clip_boxes(clip_sample, results):
     score_filter_indices = [(result["scores"] > 0.95).nonzero().flatten() for result in results]
     filter_boxes = [result["boxes"][indices] for result, indices in zip(results, score_filter_indices)]
     frame_list = []
@@ -189,5 +230,64 @@ def plot_clip_boxes(clip_sample, results):
 
     plt.imshow(img)
     os.makedirs("test_img", exist_ok=True)
-    plt.savefig("test_img/test.png")
+    plt.savefig("test_img/test_1.png")
+    plt.close()
+
+
+def plot_pred_person_link(clip_sample, results, same_psn_idx_lists):
+    id2coloer = {0: (255, 0, 0), 1: (0, 255, 0), 2: (0, 255, 255), 3: (255, 255, 255)}
+
+    filter_boxes_lists = []
+    for i, psn_list in enumerate(same_psn_idx_lists):
+        filter_boxes_lists.append({})
+        for frame_idx, origin_query_idx in psn_list:
+            filter_boxes_lists[i][frame_idx] = results[frame_idx]["boxes"][origin_query_idx]
+
+    frame_list = []
+    for t in range(len(results)):
+        img = clip_sample[t].permute(1, 2, 0).cpu()
+        mean = torch.tensor([0.485, 0.456, 0.406])
+        std = torch.tensor([0.229, 0.224, 0.225])
+        img = img * std + mean
+        img = img.numpy()
+
+        img = np.clip(img * 255, a_min=0, a_max=255).astype(np.uint8).copy()
+        for list_idx, filter_boxes in enumerate(filter_boxes_lists):
+            if t not in filter_boxes:
+                continue
+            x1, y1, x2, y2 = filter_boxes[t].unbind()
+            cv2.rectangle(
+                img,
+                pt1=(int(x1.item()), int(y1.item())),
+                pt2=(int(x2.item()), int(y2.item())),
+                color=id2coloer[list_idx],
+                thickness=2,
+                lineType=cv2.LINE_4,
+                shift=0,
+            )
+            cv2.putText(img,
+                        text=str(list_idx) + ",  " + str(same_psn_idx_lists[list_idx][t][1]),
+                        org=(int(x1.item()), int(y1.item())),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=0.5,
+                        color=(255, 0, 0),
+                        thickness=1,
+                        lineType=cv2.LINE_4)
+        frame_list.append(img)
+
+    rows = 1
+    cols = 8
+    frame_id = 0
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4), squeeze=False, tight_layout=True)
+    for i in range(rows):
+        for j in range(cols):
+            img = frame_list[frame_id]
+            subplot_title = "frame:" + str(frame_id)
+            axes[i, j].set_title(subplot_title)
+            axes[i, j].imshow(img)
+            frame_id = frame_id + 1
+
+    plt.imshow(img)
+    os.makedirs("test_img", exist_ok=True)
+    plt.savefig("test_img/test_2.png")
     plt.close()
