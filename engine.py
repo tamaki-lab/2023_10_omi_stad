@@ -12,7 +12,7 @@ from tqdm import tqdm
 import torch
 
 import util.misc as utils
-from util.plot_utils import plot_frame_boxes, plot_clip_boxes
+from util.plot_utils import plot_frame_boxes, plot_clip_boxes, plot_person_link
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
 from models.person_encoder import make_same_person_list
@@ -84,11 +84,22 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
         outputs = model(samples)
         loss_dict, indices_ex = criterion(outputs, targets)
         p_queries = [outputs["queries"][0, t][idx[0]] for t, idx in enumerate(indices_ex)]  # if idx[0] == None: 空のテンソルが格納
+        p_query_idx2org_query_idx = [(t, idx.item()) for t, idxes in enumerate(indices_ex) for idx in idxes[0]]  # [idx of p_queries] = (frame idx, idx of origin query)
         n_gt_bbox_list = [idx[0].size(0) for idx in indices_ex]
         p_queries = torch.cat(p_queries, 0)
         p_feature_queries = psn_encoder(p_queries)
         p_loss, same_person_label = psn_criterion(p_feature_queries, indices_ex, b, t)
-        matching_scores = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
+        matching_scores, same_person_lists_clip = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
+
+        same_person_p_queries = []  # [clip_idx][person_list_idx] = p_query (tensor size is (x, D) x is len(person_list))
+        same_person_idx_lists = []  # # [clip_idx][person_list_idx] = [(frame_idx, origin_query_idx),...] len is len(person_list)
+        for clip_idx, same_person_lists in enumerate(same_person_lists_clip):
+            same_person_p_queries.append([])
+            same_person_idx_lists.append([])
+            for person_list_idx, same_person_list in enumerate(same_person_lists):
+                idx_of_p_queries = torch.Tensor(same_person_list["idx_of_p_queries"]).to(torch.int64)
+                same_person_p_queries[clip_idx].append(p_queries[idx_of_p_queries])
+                same_person_idx_lists[clip_idx].append([p_query_idx2org_query_idx[p_query_idx] for p_query_idx in idx_of_p_queries])
 
         log["psn_loss"].update(p_loss.item(), b)
         log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
@@ -111,6 +122,8 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
 
         # plot
         # plot_frame_boxes(samples[0], results[0])
-        plot_clip_boxes(samples[0:t], results[0:t])
+        # plot_clip_boxes(samples[0:t], results[0:t])
+        plot_person_link(samples[0:t], results[0:t], same_person_idx_lists[0])
+
         # plot_frame_boxes(samples.tensors[0], results[0])
         continue

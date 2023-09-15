@@ -8,6 +8,7 @@ from pytorch_metric_learning import (
     distances,
 )
 import statistics
+import numpy as np
 
 from .detr import MLP
 
@@ -94,36 +95,40 @@ class SetInfoNce(nn.Module):
 def make_same_person_list(p_f_queries, same_person_label, n_gt_bbox_list, bs, n_frames):
     split_p_f_queries = [[0] * n_frames for _ in range(bs)]  # [clip_idx][frame_idx] = torch.Tensor
     split_same_person_label = [[None] * n_frames for _ in range(bs)]
+    split_idx_list = [[None] * n_frames for _ in range(bs)]
     total = 0
     for i, n_gt_boxes in enumerate(n_gt_bbox_list):
+        split_idx_list[i // bs][i % n_frames] = total
         split_p_f_queries[i // bs][i % n_frames] = p_f_queries[total:total + n_gt_boxes]
         split_same_person_label[i // bs][i % n_frames] = same_person_label[total:total + n_gt_boxes]
         total += n_gt_boxes
-    scores_list = [make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label) for clip_p_f_queries, clip_same_person_label in zip(split_p_f_queries, split_same_person_label)]
+    tauple_list = [make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label, clip_split_idx) for clip_p_f_queries, clip_same_person_label, clip_split_idx in zip(split_p_f_queries, split_same_person_label, split_idx_list)]
+    scores_list = [tauple[0] for tauple in tauple_list]
+    same_person_lists_clip = [tauple[1] for tauple in tauple_list]
 
     scores_avg = {}
     scores_avg["diff_psn_score"] = statistics.mean([scores[0] for scores in scores_list if scores is not None])
     scores_avg["same_psn_score"] = statistics.mean([scores[1] for scores in scores_list if scores is not None])
     scores_avg["total_psn_score"] = statistics.mean([scores[2] for scores in scores_list if scores is not None])
 
-    return scores_avg
+    return scores_avg, same_person_lists_clip
 
 
-def make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label):
+def make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label, clip_split_idx):
     same_person_lists = []
 
-    for frame_p_f_queries, frame_same_person_label in zip(clip_p_f_queries, clip_same_person_label):
-        sim_score = calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label)
+    for i, (frame_p_f_queries, frame_same_person_label, frame_split_idx) in enumerate(zip(clip_p_f_queries, clip_same_person_label, clip_split_idx)):
+        sim_score = calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, frame_split_idx)
 
     scores = val_same_person_lists(same_person_lists)
 
-    return scores
+    return scores, same_person_lists
 
 
-def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, th=0.30):
+def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, frame_split_idx, th=0.30):
     if len(same_person_lists) == 0:
-        for p_f_query, target_psn_id in zip(frame_p_f_queries, frame_same_person_label):
-            same_person_lists.append({"query": [p_f_query], "target_id": [target_psn_id.item()]})
+        for i, (p_f_query, target_psn_id) in enumerate(zip(frame_p_f_queries, frame_same_person_label)):
+            same_person_lists.append({"query": [p_f_query], "target_id": [target_psn_id.item()], "idx_of_p_queries": [frame_split_idx + i]})
         return -1
 
     final_queries_in_spl = torch.stack([same_person_list["query"][-1] for same_person_list in same_person_lists])
@@ -132,14 +137,23 @@ def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, th=0
     norm_final_queries_in_spl = torch.norm(final_queries_in_spl, dim=1).unsqueeze(0)
     sim_scores = dot_product / (norm_frame_p_f_queries * norm_final_queries_in_spl)
 
-    max_values, max_indexes = sim_scores.max(dim=1, keepdim=True)
-    for i, (max_sim_score, max_ind) in enumerate(zip(max_values, max_indexes)):
-        if max_sim_score > th:
-            same_person_lists[max_ind]["query"].append(frame_p_f_queries[i])
-            same_person_lists[max_ind]["target_id"].append(frame_same_person_label[i].item())
+    indices_generator = find_max_indices(sim_scores.cpu())
+    for idx, (i, j) in enumerate(indices_generator):
+        if sim_scores[i, j] > th:
+            same_person_lists[j]["query"].append(frame_p_f_queries[i])
+            same_person_lists[j]["target_id"].append(frame_same_person_label[i].item())
+            same_person_lists[j]["idx_of_p_queries"].append(frame_split_idx + i)
         else:
-            same_person_lists.append({"query": [frame_p_f_queries[i]], "target_id": [frame_same_person_label[i].item()]})
+            same_person_lists.append({"query": [frame_p_f_queries[i]], "target_id": [frame_same_person_label[i].item()], "idx_of_p_queries": [frame_split_idx + i]})
     return sim_scores
+
+
+def find_max_indices(tensor):
+    for _ in range(tensor.size(0)):
+        i, j = np.unravel_index(np.argmax(tensor), tensor.shape)
+        yield i, j
+        tensor[i, :] = 0
+        tensor[:, j] = 0
 
 
 def val_same_person_lists(same_person_lists):

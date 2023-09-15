@@ -166,6 +166,15 @@ def main(args):
 
     # log loss before training
     evaluate(
+        model, criterion, postprocessors, data_loader_train, device, args.output_dir, psn_encoder, psn_criterion, train_log, ex
+    )
+    ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=0)
+    ex.log_metric("epoch_train_diff_psn_score", train_log["diff_psn_score"].avg, step=0)
+    ex.log_metric("epoch_train_same_psn_score", train_log["same_psn_score"].avg, step=0)
+    ex.log_metric("epoch_train_total_psn_score", train_log["total_psn_score"].avg, step=0)
+    [train_log[key].reset() for key in train_log.keys()]
+
+    evaluate(
         model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
     )
     ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
