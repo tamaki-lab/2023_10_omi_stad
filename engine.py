@@ -47,7 +47,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         p_queries = torch.cat(p_queries, 0)
         p_feature_queries = psn_encoder(p_queries)
         p_loss, same_person_label = psn_criterion(p_feature_queries, indices_ex, b, t)
-        matching_scores = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
+        matching_scores, same_person_lists_clip = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
 
         optimizer.zero_grad()
         p_loss.backward()
