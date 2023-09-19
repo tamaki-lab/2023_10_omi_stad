@@ -17,28 +17,29 @@ class PersonEncoder(nn.Module):
     def __init__(self, in_d=256, out_d=256):
         super().__init__()
         # self.psn_query_embed = nn.Linear(in_d, out_d)
-        # self.psn_query_embed = MLP(in_d, out_d, out_d, 5)
+        # self.psn_query_embed = MLP(in_d, out_d, out_d, 3)
         self.psn_query_embed = MLPDrop(in_d, out_d, out_d, 3)
 
     def forward(self, p_queries):
+        x = p_queries
         p_queries = self.psn_query_embed(p_queries)
-        return p_queries
+        return p_queries + x
 
 
 class MLPDrop(nn.Module):
-    """ Very simple multi-layer perceptron (also called FFN)"""
-
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, dropout=0.1):
         super().__init__()
         self.num_layers = num_layers
         h = [hidden_dim] * (num_layers - 1)
         self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
         self.dropouts = nn.ModuleList(nn.Dropout(dropout) for _ in range(num_layers - 1))
+        for layer in self.layers:
+            nn.init.normal_(layer.weight, mean=0, std=0.01)
+            nn.init.constant_(layer.bias, 0)
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
             x = self.dropouts[i](F.relu(layer(x))) if i < self.num_layers - 1 else layer(x)
-            # x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
 
@@ -125,7 +126,7 @@ def make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label, clip
     return scores, same_person_lists
 
 
-def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, frame_split_idx, th=0.30):
+def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, frame_split_idx, th=0.70):
     if len(same_person_lists) == 0:
         for i, (p_f_query, target_psn_id) in enumerate(zip(frame_p_f_queries, frame_same_person_label)):
             same_person_lists.append({"query": [p_f_query], "target_id": [target_psn_id.item()], "idx_of_p_queries": [frame_split_idx + i]})

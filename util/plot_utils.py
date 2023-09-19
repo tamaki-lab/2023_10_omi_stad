@@ -187,9 +187,11 @@ def plot_label_clip_boxes(clip_sample, labels):
     plt.close()
 
 
-def plot_pred_clip_boxes(clip_sample, results):
-    score_filter_indices = [(result["scores"] > 0.95).nonzero().flatten() for result in results]
+def plot_pred_clip_boxes(clip_sample, results, th=0.85):
+    score_filter_indices = [(result["scores"] > th).nonzero().flatten() for result in results]
+    filter_labels = [result["labels"][(result["scores"] > th).nonzero().flatten()] for result in results]
     filter_boxes = [result["boxes"][indices] for result, indices in zip(results, score_filter_indices)]
+    # filter_boxes_label = [(result["boxes"][indices], result["labels"][indices]) for result, indices in zip(results, score_filter_indices)]
     frame_list = []
     for t in range(len(results)):
         img = clip_sample[t].permute(1, 2, 0).cpu()
@@ -199,7 +201,9 @@ def plot_pred_clip_boxes(clip_sample, results):
         img = img.numpy()
 
         img = np.clip(img * 255, a_min=0, a_max=255).astype(np.uint8).copy()
-        for i, box in enumerate(filter_boxes[t]):
+        for i, (box, label) in enumerate(zip(filter_boxes[t], filter_labels[t])):
+            if label != 1:
+                continue
             x1, y1, x2, y2 = box.unbind()
             cv2.rectangle(
                 img,
@@ -244,7 +248,7 @@ def plot_pred_person_link(clip_sample, results, same_psn_idx_lists):
     filter_boxes_lists = []
     for i, psn_list in enumerate(same_psn_idx_lists):
         filter_boxes_lists.append({})
-        for frame_idx, origin_query_idx in psn_list:
+        for frame_idx, origin_query_idx in psn_list.items():
             filter_boxes_lists[i][frame_idx] = results[frame_idx]["boxes"][origin_query_idx]
 
     frame_list = []
@@ -270,7 +274,7 @@ def plot_pred_person_link(clip_sample, results, same_psn_idx_lists):
                 shift=0,
             )
             cv2.putText(img,
-                        text=str(list_idx) + ",  " + str(same_psn_idx_lists[list_idx][t][1]),
+                        text=str(list_idx) + ",  " + str(same_psn_idx_lists[list_idx][t]),
                         org=(int(x1.item()), int(y1.item())),
                         fontFace=cv2.FONT_HERSHEY_SIMPLEX,
                         fontScale=0.5,

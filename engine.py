@@ -92,14 +92,15 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
         matching_scores, same_person_lists_clip = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
 
         same_person_p_queries = []  # [clip_idx][person_list_idx] = p_query (tensor size is (x, D) x is len(person_list))
-        same_person_idx_lists = []  # # [clip_idx][person_list_idx] = [(frame_idx, origin_query_idx),...] len is len(person_list)
+        same_person_idx_lists = []  # [clip_idx][person_list_idx] = {frame_idx: origin_query_idx} len in len(person_list)
         for clip_idx, same_person_lists in enumerate(same_person_lists_clip):
             same_person_p_queries.append([])
             same_person_idx_lists.append([])
             for person_list_idx, same_person_list in enumerate(same_person_lists):
                 idx_of_p_queries = torch.Tensor(same_person_list["idx_of_p_queries"]).to(torch.int64)
                 same_person_p_queries[clip_idx].append(p_queries[idx_of_p_queries])
-                same_person_idx_lists[clip_idx].append([p_query_idx2org_query_idx[p_query_idx] for p_query_idx in idx_of_p_queries])
+                # same_person_idx_lists[clip_idx].append([p_query_idx2org_query_idx[p_query_idx] for p_query_idx in idx_of_p_queries])
+                same_person_idx_lists[clip_idx].append({p_query_idx2org_query_idx[p_query_idx][0]: p_query_idx2org_query_idx[p_query_idx][1] for p_query_idx in idx_of_p_queries})
 
         log["psn_loss"].update(p_loss.item(), b)
         log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
