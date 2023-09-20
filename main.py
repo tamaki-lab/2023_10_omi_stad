@@ -23,90 +23,35 @@ from models.person_encoder import PersonEncoder, SetInfoNce
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
+    # loader
+    parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
+    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--n_frames', default=8, type=int)
+
+    # setting
+    parser.add_argument('--epochs', default=5, type=int)
+    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--ex_name', default='test_ex', type=str)
+
+    # * person encoder
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
-    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=5, type=int)
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
 
-    # Model parameters
-    parser.add_argument('--frozen_weights', type=str, default=None,
-                        help="Path to the pretrained model. If set, only the mask head will be trained")
     # * Backbone
-    parser.add_argument('--backbone', default='resnet50', type=str,
+    parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
                         help="Name of the convolutional backbone to use")
-    parser.add_argument('--dilation', action='store_true',
+    parser.add_argument('--dilation', default=True,
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
-    parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
-                        help="Type of positional embedding to use on top of the image features")
 
-    # * Transformer
-    parser.add_argument('--enc_layers', default=6, type=int,
-                        help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
-                        help="Number of decoding layers in the transformer")
-    parser.add_argument('--dim_feedforward', default=2048, type=int,
-                        help="Intermediate size of the feedforward layers in the transformer blocks")
-    parser.add_argument('--hidden_dim', default=256, type=int,
-                        help="Size of the embeddings (dimension of the transformer)")
-    parser.add_argument('--dropout', default=0.1, type=float,
-                        help="Dropout applied in the transformer")
-    parser.add_argument('--nheads', default=8, type=int,
-                        help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=100, type=int,
-                        help="Number of query slots")
-    parser.add_argument('--pre_norm', action='store_true')
-
-    # * Segmentation
-    parser.add_argument('--masks', action='store_true',
-                        help="Train segmentation head if the flag is provided")
-
-    # Loss
-    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_true',
-                        help="Disables auxiliary decoding losses (loss at each layer)")
-    # * Matcher
-    parser.add_argument('--set_cost_class', default=1, type=float,
-                        help="Class coefficient in the matching cost")
-    parser.add_argument('--set_cost_bbox', default=5, type=float,
-                        help="L1 box coefficient in the matching cost")
-    parser.add_argument('--set_cost_giou', default=2, type=float,
-                        help="giou box coefficient in the matching cost")
-    # * Loss coefficients
-    parser.add_argument('--mask_loss_coef', default=1, type=float)
-    parser.add_argument('--dice_loss_coef', default=1, type=float)
-    parser.add_argument('--bbox_loss_coef', default=5, type=float)
-    parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--eos_coef', default=0.1, type=float,
-                        help="Relative classification weight of the no-object class")
-
-    # dataset parameters
-    parser.add_argument('--dataset_file', default='coco')
-    parser.add_argument('--coco_path', default='/mnt/NAS-TVS872XT/dataset/COCO', type=str)
-    parser.add_argument('--coco_panoptic_path', type=str)
-    parser.add_argument('--remove_difficult', action='store_true')
-
-    parser.add_argument('--output_dir', default='',
-                        help='path where to save, empty for no saving')
-    parser.add_argument('--device', default=0, type=int)
-    # parser.add_argument('--device', default='cuda',
-    #                     help='device to use for training / testing')
+    # others
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--resume', default='https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth', help='resume from checkpoint')
-    parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
-                        help='start epoch')
-    parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--check_dir', default="checkpoint", type=str)
+    parser.add_argument('--num_workers', default=8, type=int)
 
-    # distributed training parameters
-    parser.add_argument('--world_size', default=1, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
-    parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
-    parser.add_argument('--ex_name', default='test_ex', type=str)
-    parser.add_argument('--n_frames', default=8, type=int)
     return parser
 
 
@@ -120,27 +65,22 @@ def main(args):
     random.seed(seed)
 
     model, criterion, postprocessors = build_model(args)
+    criterion.to(device)
     model.to(device)
     model.eval()
     criterion.eval()
 
-    model_without_ddp = model
-
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print('number of params:', n_parameters)
     psn_encoder = PersonEncoder().to(device)
     psn_criterion = SetInfoNce().to(device)
 
     optimizer = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1)
-    data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1)
+    data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
+    data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
 
-    output_dir = Path(args.output_dir)
-
-    checkpoint = torch.hub.load_state_dict_from_url(args.resume, map_location='cpu', check_hash=True)
-    model_without_ddp.load_state_dict(checkpoint['model'])
+    pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
+    model.load_state_dict(torch.load(pretrain_path)["model"])
 
     train_log = {"psn_loss": utils.AverageMeter(),
                  "diff_psn_score": utils.AverageMeter(),
@@ -150,6 +90,7 @@ def main(args):
                "diff_psn_score": utils.AverageMeter(),
                "same_psn_score": utils.AverageMeter(),
                "total_psn_score": utils.AverageMeter()}
+    # exit()
 
     ex = Experiment(
         project_name="stal",
@@ -166,7 +107,7 @@ def main(args):
 
     # log loss before training
     evaluate(
-        model, criterion, postprocessors, data_loader_train, device, args.output_dir, psn_encoder, psn_criterion, train_log, ex
+        model, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log
     )
     ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=0)
     ex.log_metric("epoch_train_diff_psn_score", train_log["diff_psn_score"].avg, step=0)
@@ -175,7 +116,7 @@ def main(args):
     [train_log[key].reset() for key in train_log.keys()]
 
     evaluate(
-        model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
+        model, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
     )
     ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
     ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=0)
@@ -198,22 +139,9 @@ def main(args):
         ex.log_metric("epoch_train_total_psn_score", train_log["total_psn_score"].avg, step=epoch)
 
         lr_scheduler.step()
-        if args.output_dir:
-            checkpoint_paths = [output_dir / 'checkpoint.pth']
-            # extra checkpoint before LR drop and every 100 epochs
-            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
-                checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'epoch': epoch,
-                    'args': args,
-                }, checkpoint_path)
 
         evaluate(
-            model, criterion, postprocessors, data_loader_val, device, args.output_dir, psn_encoder, psn_criterion, val_log, ex
+            model, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
         )
         ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=epoch)
         ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=epoch)
@@ -223,30 +151,10 @@ def main(args):
         [train_log[key].reset() for key in train_log.keys()]
         [val_log[key].reset() for key in val_log.keys()]
 
-        # log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-        #              **{f'test_{k}': v for k, v in test_stats.items()},
-        #              'epoch': epoch,
-        #              'n_parameters': n_parameters}
-
-        # if args.output_dir and utils.is_main_process():
-        #     with (output_dir / "log.txt").open("a") as f:
-        #         f.write(json.dumps(log_stats) + "\n")
-
-        # for evaluation logs
-        # if coco_evaluator is not None:
-        #     (output_dir / 'eval').mkdir(exist_ok=True)
-        #     if "bbox" in coco_evaluator.coco_eval:
-        #         filenames = ['latest.pth']
-        #         if epoch % 50 == 0:
-        #             filenames.append(f'{epoch:03}.pth')
-        #         for name in filenames:
-        #             torch.save(coco_evaluator.coco_eval["bbox"].eval,
-        #                        output_dir / "eval" / name)
+        utils.save_checkpoint(model, args.check_dir, args.ex_name, epoch)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
-    if args.output_dir:
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)

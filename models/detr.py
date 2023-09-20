@@ -11,11 +11,12 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
 
-from .backbone import build_backbone
-from .matcher import build_matcher
+from .position_encoding import PositionEmbeddingSine
+from .backbone import Backbone, Joiner
+from .matcher import HungarianMatcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
-from .transformer import build_transformer
+from .transformer import Transformer
 
 
 class DETR(nn.Module):
@@ -314,50 +315,34 @@ def build(args):
     # you should pass `num_classes` to be 2 (max_obj_id + 1).
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-    num_classes = 20 if args.dataset_file != 'coco' else 91
-    if args.dataset_file == "coco_panoptic":
-        # for panoptic, we just add a num_classes that is large enough to hold
-        # max_obj_id + 1, but the exact value doesn't really matter
-        num_classes = 250
-    device = torch.device(args.device)
+    num_classes = 91
 
-    backbone = build_backbone(args)
+    backbone_t = Backbone(args.backbone, False, False, args.dilation)
+    position_embedding = PositionEmbeddingSine(128, normalize=True)
+    backbone = Joiner(backbone_t, position_embedding)
+    backbone.num_channels = backbone_t.num_channels
 
-    transformer = build_transformer(args)
+    transformer = Transformer(return_intermediate_dec=True)
 
     model = DETR(
         backbone,
         transformer,
         num_classes=num_classes,
-        num_queries=args.num_queries,
-        aux_loss=args.aux_loss,
+        num_queries=100,
+        aux_loss=False,
     )
-    if args.masks:
-        model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    matcher = build_matcher(args)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_giou'] = args.giou_loss_coef
-    if args.masks:
-        weight_dict["loss_mask"] = args.mask_loss_coef
-        weight_dict["loss_dice"] = args.dice_loss_coef
-    # TODO this is a hack
-    if args.aux_loss:
-        aux_weight_dict = {}
-        for i in range(args.dec_layers - 1):
-            aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
-        weight_dict.update(aux_weight_dict)
+
+    matcher = HungarianMatcher(cost_class=1, cost_bbox=5, cost_giou=2)
+    weight_dict = {'loss_ce': 1, 'loss_bbox': 5}
+    # weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict['loss_giou'] = 2
 
     losses = ['labels', 'boxes', 'cardinality']
-    if args.masks:
-        losses += ["masks"]
+
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
-    criterion.to(device)
+                             eos_coef=0.1, losses=losses)
+    # criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
+    #                          eos_coef=args.eos_coef, losses=losses)
     postprocessors = {'bbox': PostProcess()}
-    if args.masks:
-        postprocessors['segm'] = PostProcessSegm()
-        if args.dataset_file == "coco_panoptic":
-            is_thing_map = {i: i <= 90 for i in range(201)}
-            postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
 
     return model, criterion, postprocessors

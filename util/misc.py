@@ -5,6 +5,7 @@ Misc functions, including distributed helpers.
 Mostly copy-paste from torchvision references.
 """
 import os
+import os.path as osp
 import subprocess
 import time
 from collections import defaultdict, deque
@@ -22,6 +23,27 @@ import torchvision
 if version.parse(torchvision.__version__) < version.parse('0.7'):
     from torchvision.ops import _new_empty_tensor
     from torchvision.ops.misc import _output_size
+
+
+def get_pretrain_path(model_name, dilation):
+    pretrain_path_dict = {
+        "resnet50": "detr-r50-e632da11.pth",
+        "resnet50_ex": "detr-r50-dc5-f0fb7ef5.pth",
+        "resnet101": "detr-r101-2c7b67e5.pth",
+        "resnet101_ex": "detr-r101-dc5-a2e86def.pth",
+    }
+    key = "_ex" if dilation else ""
+    return pretrain_path_dict[model_name + key]
+
+
+def save_checkpoint(model, check_dir, ex_name, epoch):
+    dir_name = osp.join(check_dir, ex_name)
+    file_name = f"epoch_{epoch}.pth"
+    file_path = osp.join(dir_name, file_name)
+    os.makedirs(dir_name, exist_ok=True)
+    # if not os.path.exists(dir_name):
+    #     os.makedirs(dir_name)
+    torch.save(model.state_dict(), file_path)
 
 
 class AverageMeter(object):

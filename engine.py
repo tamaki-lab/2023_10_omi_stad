@@ -23,8 +23,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     device: torch.device, epoch: int,
                     psn_encoder: torch.nn.Module, psn_criterion: torch.nn.Module,
                     log: dict, ex: Experiment):
-    # model.train()
-    # criterion.train()
+
     psn_encoder.train()
     psn_criterion.train()
 
@@ -68,7 +67,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, psn_encoder, psn_criterion, log, ex):
+def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder, psn_criterion, log):
     psn_encoder.eval()
     psn_criterion.eval()
 
@@ -110,7 +109,7 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir, 
         pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
-        continue
+        # continue
         orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
