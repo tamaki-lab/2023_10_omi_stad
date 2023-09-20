@@ -21,7 +21,83 @@ import av
 from datasets.utils import info_from_json
 
 
-def video_decorder_for_detr(
+def get_loader(
+    shard_path,
+    batch_size,
+    clip_frames=4,
+    sampling_rate=8,
+    num_workers=16,
+    shuffle_buffer_size=100,
+):
+    shards_path = [
+        str(path) for path in Path(shard_path).glob("*.tar") if not path.is_dir()
+    ]
+    dataset_size, n_classes = info_from_json(shard_path)
+    dataset = make_dataset(
+        shards_url=shards_path,
+        dataset_size=dataset_size,
+        shuffle_buffer_size=shuffle_buffer_size,
+        clip_frames=clip_frames,
+        sampling_rate=sampling_rate,
+    )
+    loader = DataLoader(
+        dataset,
+        num_workers=num_workers,
+        batch_size=batch_size,
+        collate_fn=collater,
+        drop_last=True,
+    )
+
+    return loader
+
+
+def make_dataset(
+    shards_url,
+    dataset_size,
+    shuffle_buffer_size,
+    clip_frames,
+    sampling_rate,
+):
+    dataset_name = shards_url[0].split("/")[-3]
+    if dataset_name in ["UCF101-24", "JHMDB"]:
+        decoder = trimmed_video_decorder
+        # decoder = video_decorder
+    elif dataset_name == "AVA":
+        decoder = untrimmed_video_decorder
+    else:
+        raise NameError(f"invalide dataset name: {dataset_name}")
+
+    decode_video = partial(
+        decoder,
+        num_sample_frame=clip_frames,
+        sampling_rate=sampling_rate,
+    )
+
+    dataset = wds.WebDataset(shards_url)
+    dataset = dataset.shuffle(shuffle_buffer_size)
+    dataset = dataset.decode(
+        wds.handle_extension("video.pickle", lambda x: (pickle.loads(x))),
+    )
+    dataset = dataset.to_tuple(
+        "video.pickle",
+    )
+    dataset = dataset.map_tuple(
+        decode_video,
+    )
+    dataset = dataset.with_length(dataset_size)
+
+    return dataset
+
+
+def collater(data):
+    videos = [d[0][0] for d in data]
+    videos = torch.stack(videos, dim=0)
+    targets = [d[0][1][0] for d in data]
+
+    return videos, targets
+
+
+def trimmed_video_decorder(
     video_pickle,
     num_sample_frame,
     sampling_rate,
@@ -36,73 +112,23 @@ def video_decorder_for_detr(
     bbox_ano = video_stats["label_bbox"]
 
     clip, frame_indices_list = get_clip(jpg_byte_list, n_frames, nf, sr)
-    new_clip, scale = resize(clip)
+    new_clip, resize_scale, resize_size, org_size = resize(clip)
 
     label = [{} for _ in range(nf)]
-    bbox_anno = get_clip_label(bbox_ano, frame_indices_list, scale)
+    bbox_anno = get_clip_label(bbox_ano, frame_indices_list, resize_scale, resize_size)
     for i in range(nf):
         label[i]["boxes"] = torch.Tensor(bbox_anno[i][:, :4])
         label[i]["action_labels"] = torch.Tensor(bbox_anno[i][:, 4]).to(torch.int64)
         label[i]["labels"] = torch.ones(bbox_anno[i].shape[0], dtype=torch.int64)   # object class (id of person class in detr is 1)
         label[i]["person_id"] = torch.Tensor(bbox_anno[i][:, 5]).to(torch.int64)
-        label[i]["orig_size"] = torch.as_tensor([int(512), int(512)])
-        label[i]["size"] = torch.as_tensor([int(512), int(512)])
-
-        label[i]["boxes"] = xyxy2cxcywh(label[i]["boxes"])
-        label[i]["boxes"] = box_normalize(label[i]["boxes"], label[i]["size"])
+        label[i]["orig_size"] = torch.as_tensor(org_size)
+        label[i]["size"] = torch.as_tensor(resize_size)
 
     is_org_label = [True for _ in range(nf)]  # ucf and jhmdb are laebed all frames
 
     label = (label, is_org_label)
 
     return new_clip, label
-
-
-def xyxy2cxcywh(boxes: torch.Tensor):
-    x0, y0, x1, y1 = boxes.unbind(-1)
-    b = [(x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0), (y1 - y0)]
-    return torch.stack(b, dim=-1)
-
-
-def box_normalize(boxes: torch.Tensor, size: torch.Tensor):
-    img_h, img_w = size.unbind(-1)
-    boxes = boxes / torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
-    return boxes
-
-
-# https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch/blob/15403b5371a64defb2a7c74e162c6e880a7f462c/efficientdet/dataset.py#L110
-
-
-def resize(clip: list, img_size=512) -> Tuple[torch.Tensor, float]:
-    height, width, _ = np.array(clip[0]).shape
-    if height > width:
-        scale = img_size / height
-        resized_height = img_size
-        resized_width = int(width * scale)
-    else:
-        scale = img_size / width
-        resized_height = int(height * scale)
-        resized_width = img_size
-
-    new_clip = []
-    for frame in clip:
-        img = np.array(frame).astype(np.float32) / 255.0
-        img = cv2.resize(
-            img, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR
-        )
-
-        new_img = np.zeros((img_size, img_size, 3))
-        new_img[0:resized_height, 0:resized_width] = img
-        mean = np.array([0.485, 0.456, 0.406])
-        std = np.array([0.229, 0.224, 0.225])
-        new_img = (new_img - mean) / std
-        new_clip.append(new_img)
-
-    new_clip = [torch.from_numpy(img).to(torch.float32) for img in new_clip]
-    new_clip = torch.stack(new_clip, 0)
-    new_clip = torch.permute(new_clip, (3, 0, 1, 2))
-
-    return new_clip, scale
 
 
 def get_clip(jpg_byte_list: list, n_frames: int, nf: int, sr: int) -> Tuple[list, list]:
@@ -135,13 +161,14 @@ def get_clip(jpg_byte_list: list, n_frames: int, nf: int, sr: int) -> Tuple[list
 
 
 def get_clip_label(
-    bbox_ano: dict, frame_indices_list: list, scale: float
+    bbox_ano: dict, frame_indices_list: list, resize_scale: float, size: Tuple[int, int]
 ) -> List[np.ndarray]:
     """
     Args:
         bbox_ano (dict): annotation
         frame_indices_list (list): list of frame index in original clip
-        scale (float): resize scale
+        resize_scale (float): resize scale
+        size (Tuple[int, int]): image size after resizing
 
     Returns:
         List[np.ndarray]: clip annotation
@@ -153,38 +180,60 @@ def get_clip_label(
             for obj_id, one_bbox_ano in bbox_ano[str(f_idx)].items():
                 annotation = np.zeros((1, 6))  # [x,y,x,y,class_id, person_id]
                 annotation[0, :5] = one_bbox_ano
-                annotation[0, :4] *= scale
+                annotation[0, :4] *= resize_scale
+                annotation[0, :4] = xyxy2cxcywh(annotation[0, :4])
+                annotation[0, :4] = box_normalize(annotation[0, :4], size)
                 annotation[0, 5] = int(obj_id)
                 annotations = np.append(annotations, annotation, axis=0)
         label.append(annotations)
     return label
 
 
-def video_decorder(
-    video_pickle,
-    num_sample_frame,
-    sampling_rate,
-):
-    nf = num_sample_frame
-    sr = sampling_rate
+def resize(clip: list, resize_size=512) -> Tuple[torch.Tensor, float]:
+    height, width, _ = np.array(clip[0]).shape
+    if height > width:
+        scale = resize_size / height
+        resized_height = resize_size
+        resized_width = int(width * scale)
+    else:
+        scale = resize_size / width
+        resized_height = int(height * scale)
+        resized_width = resize_size
 
-    jpg_byte_list, video_stats = video_pickle
-    video_stats = json.loads(video_stats)
+    new_clip = []
+    for frame in clip:
+        img = np.array(frame).astype(np.float32) / 255.0
+        img = cv2.resize(
+            img, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR
+        )
 
-    n_frames = video_stats["n_frames"]
-    bbox_ano = video_stats["label_bbox"]
+        new_img = np.zeros((resize_size, resize_size, 3))
+        new_img[0:resized_height, 0:resized_width] = img
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        new_img = (new_img - mean) / std
+        new_clip.append(new_img)
 
-    clip, frame_indices_list = get_clip(jpg_byte_list, n_frames, nf, sr)
+    new_clip = [torch.from_numpy(img).to(torch.float32) for img in new_clip]
+    new_clip = torch.stack(new_clip, 0)
+    new_clip = torch.permute(new_clip, (3, 0, 1, 2))
 
-    new_clip, scale = resize(clip)
+    orig_img_size = (height, width)
+    resize_size = (resize_size, resize_size)
 
-    label = get_clip_label(bbox_ano, frame_indices_list, scale)
+    return new_clip, scale, resize_size, orig_img_size
 
-    is_org_label = [True for _ in range(nf)]  # ucf and jhmdb are laebed all frames
 
-    label = (label, is_org_label)
+def xyxy2cxcywh(box: np.ndarray):
+    x0, y0, x1, y1 = np.split(box, box.shape[0], axis=0)
+    box = [float((x0 + x1) / 2), float((y0 + y1) / 2), float(x1 - x0), float(y1 - y0)]
+    return box
 
-    return new_clip, label
+
+def box_normalize(box: np.ndarray, size):
+    img_h, img_w = size
+    box = box / np.array([img_w, img_h, img_w, img_h])
+    return box
 
 
 def get_frame_indices(
@@ -337,114 +386,6 @@ def untrimmed_video_decorder(
     label = (label, is_org_label)
 
     return new_clip, label
-
-
-def make_dataset(
-    shards_url,
-    dataset_size,
-    shuffle_buffer_size,
-    clip_frames,
-    sampling_rate,
-):
-    dataset_name = shards_url[0].split("/")[-3]
-    if dataset_name in ["UCF101-24", "JHMDB"]:
-        decoder = video_decorder_for_detr
-        # decoder = video_decorder
-    elif dataset_name == "AVA":
-        decoder = untrimmed_video_decorder
-    else:
-        raise NameError(f"invalide dataset name: {dataset_name}")
-
-    decode_video = partial(
-        decoder,
-        num_sample_frame=clip_frames,
-        sampling_rate=sampling_rate,
-    )
-
-    dataset = wds.WebDataset(shards_url)
-    dataset = dataset.shuffle(shuffle_buffer_size)
-    dataset = dataset.decode(
-        wds.handle_extension("video.pickle", lambda x: (pickle.loads(x))),
-    )
-    dataset = dataset.to_tuple(
-        "video.pickle",
-    )
-    dataset = dataset.map_tuple(
-        decode_video,
-    )
-    dataset = dataset.with_length(dataset_size)
-
-    return dataset
-
-
-def collater(data):
-    batch = {}
-    is_org_label = [d[0][1][1] for d in data]
-    annots = [d[0][1][0] for d in data]
-    num_frame = data[0][0][0].shape[1]
-    max_num_annots = 0
-    for video_ano in annots:
-        num_ano = max(f_ano.shape[0] for f_ano in video_ano)
-        if num_ano > max_num_annots:
-            max_num_annots = num_ano
-
-    if max_num_annots > 0:
-        annots_padded = torch.ones((len(annots), num_frame, max_num_annots, 5)) * -1
-        for idx, video_annot in enumerate(annots):
-            for jdx, frame_annot in enumerate(video_annot):
-                if frame_annot.shape[0] > 0:
-                    frame_annot = torch.from_numpy(frame_annot)
-                    annots_padded[idx, jdx, : frame_annot.shape[0], :] = frame_annot
-    else:
-        annots_padded = torch.ones((len(annots), num_frame, 1, 5)) * -1
-
-    videos = [d[0][0] for d in data]
-    videos = torch.stack(videos, dim=0)
-
-    batch["clip"] = videos
-    batch["ano"] = annots_padded
-    batch["is_org_label"] = is_org_label
-
-    return batch
-
-
-def collater_for_detr(data):
-    videos = [d[0][0] for d in data]
-    videos = torch.stack(videos, dim=0)
-    targets = [d[0][1][0] for d in data]
-
-    return videos, targets
-
-
-def get_loader(
-    shard_path,
-    batch_size,
-    clip_frames=4,
-    sampling_rate=8,
-    num_workers=16,
-    shuffle_buffer_size=100,
-):
-    shards_path = [
-        str(path) for path in Path(shard_path).glob("*.tar") if not path.is_dir()
-    ]
-    dataset_size, n_classes = info_from_json(shard_path)
-    dataset = make_dataset(
-        shards_url=shards_path,
-        dataset_size=dataset_size,
-        shuffle_buffer_size=shuffle_buffer_size,
-        clip_frames=clip_frames,
-        sampling_rate=sampling_rate,
-    )
-    loader = DataLoader(
-        dataset,
-        num_workers=num_workers,
-        batch_size=batch_size,
-        collate_fn=collater_for_detr,
-        # collate_fn=collater,
-        drop_last=True,
-    )
-
-    return loader
 
 
 def save_fig(clip, labels, file_name):
