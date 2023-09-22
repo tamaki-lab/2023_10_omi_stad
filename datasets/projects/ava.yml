@@ -1,0 +1,105 @@
+dataset_name: "ava"
+
+train_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/AVA/train/"
+val_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/AVA/val/"
+
+dataset_path: "/mnt/NVMe1TB/dataset/AVA/video.ava-action"
+
+train_annotation_file_path: "/mnt/NAS-TVS872XT/dataset/AVA/AVA-Actions/ava_v2.2/ava_train_v2.2.csv"
+val_annotation_file_path: "/mnt/NAS-TVS872XT/dataset/AVA/AVA-Actions/ava_v2.2/ava_val_v2.2.csv"
+
+org_label_list_file_path: "/mnt/NVMe1TB/dataset/AVA/labels/ava_action_list_v2.2.pbtxt"
+label_list_file_path: "/mnt/NVMe1TB/dataset/AVA/labels/ava_action_list_v2.2_for_activitynet_2019.pbtxt"
+
+num_classes: 80
+
+# original label (80 class)
+# label_list: ["bend/bow (at the waist)","crawl","crouch/kneel","dance",
+#              "fall down","get up","jump/leap","lie/sleep","martial art",
+#              "run/jog","sit","stand","swim","walk","answer phone",
+#              "brush teeth","carry/hold (an object)","catch (an object)",
+#              "chop","climb (e.g., a mountain)","clink glass",
+#              "close (e.g., a door, a box)","cook","cut","dig",
+#              "dress/put on clothing","drink","drive (e.g., a car, a truck)",
+#              "eat","enter","exit","extract","fishing","hit (an object)",
+#              "kick (an object)","lift/pick up","listen (e.g., to music)",
+#              "open (e.g., a window, a car door)","paint","play board game",
+#              "play musical instrument","play with pets","point to (an object)",
+#              "press","pull (an object)","push (an object)","put down","read",
+#              "ride (e.g., a bike, a car, a horse)","row boat","sail boat",
+#              "shoot","shovel","smoke","stir","take a photo",
+#              "text on/look at a cellphone","throw","touch (an object)",
+#              "turn (e.g., a screwdriver)","watch (e.g., TV)",
+#              "work on a computer","write","fight/hit (a person)",
+#              "give/serve (an object) to (a person)","grab (a person)",
+#              "hand clap","hand shake","hand wave","hug (a person)",
+#              "kick (a person)","kiss (a person)","lift (a person)",
+#              "listen to (a person)","play with kids","push (another person)",
+#              "sing to (e.g., self, a person, a group)",
+#              "take (an object) from (a person)",
+#              "talk to (e.g., self, a person, a group)","watch (a person)"]
+
+# label for activitynet (60 class)
+label_list:
+  [
+    "bend/bow (at the waist)",
+    "crouch/kneel",
+    "dance",
+    "fall down",
+    "get up",
+    "jump/leap",
+    "lie/sleep",
+    "martial art",
+    "run/jog",
+    "sit",
+    "stand",
+    "swim",
+    "walk",
+    "answer phone",
+    "carry/hold (an object)",
+    "climb (e.g., a mountain)",
+    "close (e.g., a door, a box)",
+    "cut",
+    "dress/put on clothing",
+    "drink",
+    "drive (e.g., a car, a truck)",
+    "eat",
+    "enter",
+    "hit (an object)",
+    "lift/pick up",
+    "listen (e.g., to music)",
+    "open (e.g., a window, a car door)",
+    "play musical instrument",
+    "point to (an object)",
+    "pull (an object)",
+    "push (an object)",
+    "put down",
+    "read",
+    "ride (e.g., a bike, a car, a horse)",
+    "sail boat",
+    "shoot",
+    "smoke",
+    "take a photo",
+    "text on/look at a cellphone",
+    "throw",
+    "touch (an object)",
+    "turn (e.g., a screwdriver)",
+    "watch (e.g., TV)",
+    "work on a computer",
+    "write",
+    "fight/hit (a person)",
+    "give/serve (an object) to (a person)",
+    "grab (a person)",
+    "hand clap",
+    "hand shake",
+    "hand wave",
+    "hug (a person)",
+    "kiss (a person)",
+    "lift (a person)",
+    "listen to (a person)",
+    "push (another person)",
+    "sing to (e.g., self, a person, a group)",
+    "take (an object) from (a person)",
+    "talk to (e.g., self, a person, a group)",
+    "watch (a person)",
+  ]

@@ -1,0 +1,41 @@
+dataset_name: "ucf101-24"
+
+train_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/UCF101-24/train/"
+val_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/UCF101-24/val/"
+
+dataset_path: "/mnt/NVMe1TB/dataset/UCF101-24/rgb-images"
+
+train_videos_file_path: "/mnt/NVMe1TB/dataset/UCF101-24/Annotations-UCF/trainlist_video.txt"
+val_videos_file_path: "/mnt/NVMe1TB/dataset/UCF101-24/Annotations-UCF/testlist_video.txt"
+
+annotation_file_path: "/mnt/NVMe1TB/dataset/UCF101-24/UCF101-24.formatted.json"
+
+num_classes: 24
+
+label_list:
+  [
+    "Basketball",
+    "BasketballDunk",
+    "Biking",
+    "CliffDiving",
+    "CricketBowling",
+    "Diving",
+    "Fencing",
+    "FloorGymnastics",
+    "GolfSwing",
+    "HorseRiding",
+    "IceDancing",
+    "LongJump",
+    "PoleVault",
+    "RopeClimbing",
+    "SalsaSpin",
+    "SkateBoarding",
+    "Skiing",
+    "Skijet",
+    "SoccerJuggling",
+    "Surfing",
+    "TennisSwing",
+    "TrampolineJumping",
+    "VolleyballSpiking",
+    "WalkingWithDog",
+  ]

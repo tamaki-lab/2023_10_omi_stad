@@ -1,0 +1,38 @@
+dataset_name: "jhmdb21"
+
+train_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/JHMDB/train/"
+val_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/JHMDB/val/"
+
+dataset_path: "/mnt/NVMe1TB/dataset/JHMDB/Frames"
+
+train_videos_file_path: "/mnt/NVMe1TB/dataset/JHMDB/split/trainlist1.txt"
+val_videos_file_path: "/mnt/NVMe1TB/dataset/JHMDB/split/testlist1.txt"
+
+annotation_file_path: "//mnt/NVMe1TB/dataset/JHMDB/JHMDB-GT.formatted.json"
+
+num_classes: 21
+
+label_list:
+  [
+    "brush_hair",
+    "catch",
+    "clap",
+    "climb_stairs",
+    "golf",
+    "jump",
+    "kick_ball",
+    "pick",
+    "pour",
+    "pullup",
+    "push",
+    "run",
+    "shoot_ball",
+    "shoot_bow",
+    "shoot_gun",
+    "sit",
+    "stand",
+    "swing_baseball",
+    "throw",
+    "walk",
+    "wave",
+  ]
