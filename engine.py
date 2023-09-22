@@ -2,19 +2,12 @@
 """
 Train and eval functions used in main.py
 """
-from comet_ml import Experiment
-import math
-import os
-import sys
 from typing import Iterable
+from comet_ml import Experiment
 from tqdm import tqdm
-
 import torch
 
-import util.misc as utils
 from util.plot_utils import plot_label_clip_boxes, plot_pred_clip_boxes, plot_pred_person_link
-from datasets.coco_eval import CocoEvaluator
-from datasets.panoptic_eval import PanopticEvaluator
 from models.person_encoder import make_same_person_list
 
 
@@ -32,7 +25,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     pbar_batch = tqdm(enumerate(data_loader), total=len(data_loader), leave=False)
     for i, (samples, targets) in pbar_batch:
         samples = samples.to(device)
-        # targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         targets = [[{k: v.to(device) for k, v in t.items()} for t in vtgt] for vtgt in targets]
         targets = [t for vtgt in targets for t in vtgt]
         b, c, t, h, w = samples.size()
@@ -98,7 +90,6 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
             for person_list_idx, same_person_list in enumerate(same_person_lists):
                 idx_of_p_queries = torch.Tensor(same_person_list["idx_of_p_queries"]).to(torch.int64)
                 same_person_p_queries[clip_idx].append(p_queries[idx_of_p_queries])
-                # same_person_idx_lists[clip_idx].append([p_query_idx2org_query_idx[p_query_idx] for p_query_idx in idx_of_p_queries])
                 same_person_idx_lists[clip_idx].append({p_query_idx2org_query_idx[p_query_idx][0]: p_query_idx2org_query_idx[p_query_idx][1] for p_query_idx in idx_of_p_queries})
 
         log["psn_loss"].update(p_loss.item(), b)
@@ -109,21 +100,11 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
-        # continue
+        continue
         orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-        # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
-        if 'segm' in postprocessors.keys():
-            target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-            results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes)
-        # res = {target['image_id'].item(): output for target, output in zip(targets, results)}
-        # if coco_evaluator is not None:
-        #     coco_evaluator.update(res)
 
         # plot
         plot_label_clip_boxes(samples[0:t], targets[0:t])
         plot_pred_clip_boxes(samples[0:t], results[0:t])
         plot_pred_person_link(samples[0:t], results[0:t], same_person_idx_lists[0])
-
-        # plot_frame_boxes(samples.tensors[0], results[0])
-        continue

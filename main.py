@@ -1,21 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-from comet_ml import Experiment
 import argparse
-import datetime
-import json
 import random
-import time
-from pathlib import Path
+from comet_ml import Experiment
 from tqdm import tqdm
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, DistributedSampler
 
-import datasets
 from datasets.use_shards import get_loader
 import util.misc as utils
-from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
 from models.person_encoder import PersonEncoder, SetInfoNce
@@ -23,25 +16,23 @@ from models.person_encoder import PersonEncoder, SetInfoNce
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
+
     # loader
     parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--n_frames', default=8, type=int)
 
     # setting
-    parser.add_argument('--epochs', default=5, type=int)
+    parser.add_argument('--epochs', default=100, type=int)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='test_ex', type=str)
 
-    # * person encoder
-    parser.add_argument('--lr', default=1e-4, type=float)
-    parser.add_argument('--lr_backbone', default=1e-5, type=float)
-    parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--lr_drop', default=200, type=int)
-    parser.add_argument('--clip_max_norm', default=0.1, type=float,
-                        help='gradient clipping max norm')
+    # person encoder
+    parser.add_argument('--lr_en', default=1e-4, type=float)
+    parser.add_argument('--weight_decay_en', default=1e-4, type=float)
+    parser.add_argument('--lr_drop_en', default=50, type=int)
 
-    # * Backbone
+    # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', default=True,
@@ -64,23 +55,23 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    detr, criterion, postprocessors = build_model(args)
     criterion.to(device)
-    model.to(device)
-    model.eval()
+    detr.to(device)
+    detr.eval()
     criterion.eval()
 
     psn_encoder = PersonEncoder().to(device)
     psn_criterion = SetInfoNce().to(device)
 
-    optimizer = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
+    optimizer_en = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr_en, weight_decay=args.weight_decay_en)
+    lr_scheduler_en = torch.optim.lr_scheduler.StepLR(optimizer_en, args.lr_drop_en)
 
     data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
     data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
 
     pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
-    model.load_state_dict(torch.load(pretrain_path)["model"])
+    detr.load_state_dict(torch.load(pretrain_path)["model"])
 
     train_log = {"psn_loss": utils.AverageMeter(),
                  "diff_psn_score": utils.AverageMeter(),
@@ -90,7 +81,6 @@ def main(args):
                "diff_psn_score": utils.AverageMeter(),
                "same_psn_score": utils.AverageMeter(),
                "total_psn_score": utils.AverageMeter()}
-    # exit()
 
     ex = Experiment(
         project_name="stal",
@@ -98,8 +88,8 @@ def main(args):
     )
     hyper_params = {
         "ex_name": args.ex_name,
-        "optimizer": str(type(optimizer)).split("class")[-1][2:-2],
-        "learning late": args.lr,
+        "optimizer_en": str(type(optimizer_en)).split("class")[-1][2:-2],
+        "learning late": args.lr_en,
         "batch_size": args.batch_size,
         "n_frames": args.n_frames,
     }
@@ -107,7 +97,7 @@ def main(args):
 
     # log loss before training
     evaluate(
-        model, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log
+        detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log
     )
     ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=0)
     ex.log_metric("epoch_train_diff_psn_score", train_log["diff_psn_score"].avg, step=0)
@@ -116,7 +106,7 @@ def main(args):
     [train_log[key].reset() for key in train_log.keys()]
 
     evaluate(
-        model, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
+        detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
     )
     ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
     ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=0)
@@ -130,7 +120,7 @@ def main(args):
     for epoch in pbar_epoch:
         pbar_epoch.set_description(f"[Epoch {epoch}]")
         train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
+            detr, criterion, data_loader_train, optimizer_en, device, epoch,
             psn_encoder, psn_criterion, train_log, ex)
 
         ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=epoch)
@@ -138,10 +128,10 @@ def main(args):
         ex.log_metric("epoch_train_same_psn_score", train_log["same_psn_score"].avg, step=epoch)
         ex.log_metric("epoch_train_total_psn_score", train_log["total_psn_score"].avg, step=epoch)
 
-        lr_scheduler.step()
+        lr_scheduler_en.step()
 
         evaluate(
-            model, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
+            detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
         )
         ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=epoch)
         ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=epoch)
@@ -151,7 +141,7 @@ def main(args):
         [train_log[key].reset() for key in train_log.keys()]
         [val_log[key].reset() for key in val_log.keys()]
 
-        utils.save_checkpoint(model, args.check_dir, args.ex_name, epoch)
+        utils.save_checkpoint(psn_encoder, args.check_dir, args.ex_name, epoch)
 
 
 if __name__ == '__main__':
