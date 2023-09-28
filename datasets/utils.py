@@ -3,6 +3,7 @@ from webdataset import ShardWriter
 from multiprocessing.managers import BaseManager
 from pathlib import Path
 import json
+import numpy as np
 
 
 def bytes2kmg(size: int) -> str:
@@ -73,3 +74,15 @@ def info_from_json(shard_path):
     dataset_size = info_dic['dataset size']
     n_classes = info_dic['n_classes']
     return dataset_size, n_classes
+
+
+def xyxy2cxcywh(box: np.ndarray):
+    x0, y0, x1, y1 = np.split(box, box.shape[0], axis=0)
+    box = [float((x0 + x1) / 2), float((y0 + y1) / 2), float(x1 - x0), float(y1 - y0)]
+    return box
+
+
+def box_normalize(box: np.ndarray, size):
+    img_h, img_w = size
+    box = box / np.array([img_w, img_h, img_w, img_h])
+    return box

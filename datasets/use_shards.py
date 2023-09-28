@@ -16,9 +16,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import av
 
-# from utils import info_from_json  # for debug
-
-from datasets.utils import info_from_json
+from datasets.utils import info_from_json, xyxy2cxcywh, box_normalize
 
 
 def get_loader(
@@ -222,18 +220,6 @@ def resize(clip: list, resize_size=512) -> Tuple[torch.Tensor, float]:
     resize_size = (resize_size, resize_size)
 
     return new_clip, scale, resize_size, orig_img_size
-
-
-def xyxy2cxcywh(box: np.ndarray):
-    x0, y0, x1, y1 = np.split(box, box.shape[0], axis=0)
-    box = [float((x0 + x1) / 2), float((y0 + y1) / 2), float(x1 - x0), float(y1 - y0)]
-    return box
-
-
-def box_normalize(box: np.ndarray, size):
-    img_h, img_w = size
-    box = box / np.array([img_w, img_h, img_w, img_h])
-    return box
 
 
 def get_frame_indices(
