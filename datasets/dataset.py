@@ -155,10 +155,10 @@ class VideoData(torch.utils.data.Dataset):
 
         # resize
         img = cv2.resize(
-            img, (self.resized_hw[1], self.resized_hw[0]), interpolation=cv2.INTER_LINEAR
+            img, (self.resized_hw[0], self.resized_hw[1]), interpolation=cv2.INTER_LINEAR
         )
         new_img = np.zeros((self.resize_size[0], self.resize_size[1], 3))
-        new_img[0:self.resized_hw[0], 0:self.resized_hw[1]] = img
+        new_img[0:self.resized_hw[1], 0:self.resized_hw[0]] = img
 
         # normalize
         mean = np.array([0.485, 0.456, 0.406])
