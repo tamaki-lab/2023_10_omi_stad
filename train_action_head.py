@@ -9,9 +9,11 @@ import av
 import cv2
 import numpy as np
 import torch
+import copy
 
 from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
+from util.box_ops import generalized_box_iou
 from models import build_model
 from models.person_encoder import PersonEncoder, SetInfoNce
 
@@ -67,7 +69,7 @@ def main(args):
     psn_criterion.eval()
 
     train_loader = get_video_loader("ucf101-24", "train")
-    val_loader = get_video_loader("ucf101-24", "val")
+    # val_loader = get_video_loader("ucf101-24", "val")
 
     # train_log = {"psn_loss": utils.AverageMeter(),
     #              "diff_psn_score": utils.AverageMeter(),
@@ -87,11 +89,18 @@ def main(args):
     # }
     # ex.log_parameters(hyper_params)
 
-    pbar_videos = tqdm(enumerate(val_loader), total=len(val_loader), leave=False)
+    pbar_videos = tqdm(enumerate(train_loader), total=len(train_loader), leave=False)
     for video_idx, (img_paths, video_ano) in pbar_videos:
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
         person_lists = []
         end_list_idx_set = set()
+
+        # flag = False
+        # for frame_idx, frame_ano in video_ano.items():
+        #     if len(frame_ano) > 2:
+        #         flag = True
+        # if not flag:
+        #     continue
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         for clip_idx, (samples, targets) in pbar_video:
@@ -103,7 +112,8 @@ def main(args):
             results = postprocessors['bbox'](outputs, orig_target_sizes)
 
             score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
-            score_filter_labels = [result["labels"][(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
+            score_filter_labels = [result["labels"]
+                                   [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
             psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
             psn_queries = [outputs["queries"][0, t][p_idx] for t, p_idx in enumerate(psn_indices)]
             psn_boxes = [result["boxes"][p_idx] for result, p_idx in zip(results, psn_indices)]
@@ -115,12 +125,19 @@ def main(args):
 
             for t, psn_features_frame in enumerate(psn_features):
                 frame_idx = args.n_frames * clip_idx + t
-                add_query_to_list(person_lists, psn_features_frame, frame_idx, psn_indices[t], psn_boxes[t], end_list_idx_set)
+                add_query_to_list(person_lists, psn_features_frame, frame_idx,
+                                  psn_indices[t], psn_boxes[t], end_list_idx_set)
+
+        # give a label for each query in person list
+        org_video_ano = copy.deepcopy(video_ano)
+        fix_ano_scale(video_ano)
+        give_label(video_ano, person_lists)
 
         # make new video with tube
         video_path = "/".join(img_paths[0].parts[-3:-1])
         video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-        make_video_with_tube(video_path, person_lists)
+        make_video_with_tube(video_path, person_lists, org_video_ano)
+        # break
         os.remove("test.avi")
         continue
 
@@ -147,7 +164,8 @@ def add_query_to_list(person_lists, psn_features_frame, frame_idx, psn_indices, 
     if len(person_lists) == 0:
         for idx, psn_feature in enumerate(psn_features_frame):
             query_idx = psn_indices[idx].item()
-            person_lists.append({"query": [psn_feature], "idx_of_p_queries": [(frame_idx, query_idx)], "bbox": [psn_boxes[idx].cpu()]})
+            person_lists.append({"query": [psn_feature], "idx_of_p_queries": [
+                                (frame_idx, query_idx)], "bbox": [psn_boxes[idx].cpu()]})
     else:
         sim_scores = get_sim_scores(person_lists, psn_features_frame)
         indices_generator = find_max_indices(sim_scores.cpu().detach(), end_list_idx_set)
@@ -158,7 +176,8 @@ def add_query_to_list(person_lists, psn_features_frame, frame_idx, psn_indices, 
                 person_lists[j]["idx_of_p_queries"].append((frame_idx, query_idx))
                 person_lists[j]["bbox"].append(psn_boxes[i].cpu())
             else:
-                person_lists.append({"query": [psn_features_frame[i]], "idx_of_p_queries": [(frame_idx, query_idx)], "bbox": [psn_boxes[i].cpu()]})
+                person_lists.append({"query": [psn_features_frame[i]], "idx_of_p_queries": [
+                                    (frame_idx, query_idx)], "bbox": [psn_boxes[i].cpu()]})
 
 
 def get_sim_scores(person_lists, psn_features_frame):
@@ -188,7 +207,31 @@ def find_max_indices(tensor, end_list_idx_set):
         yield i, -1
 
 
-def make_video_with_tube(video_path, person_lists):
+def fix_ano_scale(video_ano, resize_scale=512 / 320):
+    for frame_idx, frame_ano in video_ano.items():
+        for tube_idx, box_ano in frame_ano.items():
+            video_ano[frame_idx][tube_idx][:4] = [x * resize_scale for x in box_ano[:4]]
+
+
+def give_label(video_ano, person_lists, no_action_id=-1):
+    for person_list in person_lists:
+        person_list["action_label"] = []
+        for i, (frame_idx, _) in enumerate(person_list["idx_of_p_queries"]):
+            if frame_idx in video_ano:
+                gt_ano = [ano for tube_idx, ano in video_ano[frame_idx].items()]
+                gt_boxes = torch.tensor(gt_ano)[:, :4]
+                iou = generalized_box_iou(person_list["bbox"][i].reshape(-1, 4), gt_boxes)
+                max_v, max_idx = torch.max(iou, dim=1)
+                if max_v.item() > 0.4:
+                    person_list["action_label"].append(gt_ano[max_idx][4])
+                else:
+                    person_list["action_label"].append(no_action_id)
+                continue
+            else:
+                person_list["action_label"].append(no_action_id)
+
+
+def make_video_with_tube(video_path, person_lists, video_ano, plot_label=False):
     # color_map = random_colors(100)
     color_map = get_color_list()
 
@@ -229,14 +272,35 @@ def make_video_with_tube(video_path, person_lists):
                     x2 = int(max(min(x2, 320), 0))
                     y1 = int(max(min(y1, 240), 0))
                     y2 = int(max(min(y2, 240), 0))
+                    action_id = person_list["action_label"][idx]
                     # print(f"frame:{frame_idx}, list_idx:{list_idx}, query_idx:{idx}")
 
                     cv2.rectangle(
-                        frame, pt1=(x1, y1), pt2=(x2, y2), color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                        frame, pt1=(x1, y1), pt2=(x2, y2),
+                        color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
                     )
                     # cv2.rectangle(
                     #     frame, pt1=(x1, y1), pt2=(x2, y2), color=color_map[list_idx], thickness=2, lineType=cv2.LINE_4, shift=0,
                     # )
+                    cv2.putText(
+                        frame, text=f"{list_idx}, {action_id}", org=(x1, y1),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                        color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
+                    )
+
+        if (plot_label) and (frame_idx in video_ano):
+            for tube_idx, frame_ano in video_ano[frame_idx].items():
+                x1, y1, x2, y2 = frame_ano[:4]
+                action_id = frame_ano[4]
+                cv2.rectangle(
+                    frame, pt1=(x1, y1), pt2=(x2, y2),
+                    color=(0, 0, 0), thickness=2, lineType=cv2.LINE_4, shift=0,
+                )
+                cv2.putText(
+                    frame, text=f"{tube_idx}, {action_id}", org=(x1, y1),
+                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                    color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
+                )
 
         frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
         for packet in new_stream.encode(frame):
