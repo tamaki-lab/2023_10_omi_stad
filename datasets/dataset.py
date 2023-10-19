@@ -111,8 +111,8 @@ def simple_collater(data):
     return img_paths, video_ano
 
 
-def get_video_loader(dataset_name, subset):
-    return DataLoader(VideoDataset(dataset_name, subset), batch_size=1, collate_fn=simple_collater)
+def get_video_loader(dataset_name, subset, shuffle=True):
+    return DataLoader(VideoDataset(dataset_name, subset), batch_size=1, shuffle=shuffle, collate_fn=simple_collater)
 
 
 class VideoData(torch.utils.data.Dataset):
