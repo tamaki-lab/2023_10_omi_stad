@@ -63,3 +63,8 @@ class ActionTube:
         not_used_i_list = [x for x in range(tensor.size(0)) if x not in used_i_list]
         for i in not_used_i_list:
             yield i, -1
+
+    def filter(self, filter_length=8):
+        # print(f"num_tubes(before filterling):{len(self.tubes)}")
+        self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]
+        # print(f"num_tubes(after filterling):{len(self.tubes)}")

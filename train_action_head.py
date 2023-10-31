@@ -18,6 +18,7 @@ from util.box_ops import generalized_box_iou
 from models import build_model
 from models.person_encoder import PersonEncoder, SetInfoNce
 from models.action_head import ActionHead
+from models.tube import ActionTube
 
 
 def get_args_parser():
@@ -114,7 +115,7 @@ def main(args):
     for epoch in pbar_epoch:
         pbar_epoch.set_description(f"[Epoch {epoch}]")
 
-        # Training
+        ## Training ##
         action_head.train()
         step = len(train_loader) * (epoch - 1)
         pbar_videos = tqdm(enumerate(train_loader), total=len(train_loader), leave=False)
@@ -122,8 +123,7 @@ def main(args):
 
         for video_idx, (img_paths, video_ano) in pbar_videos:
             sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-            person_lists = []
-            end_list_idx_set = set()
+            tube = ActionTube()
 
             # make person lists
             with torch.inference_mode():
@@ -138,33 +138,30 @@ def main(args):
                     results = postprocessors['bbox'](outputs, orig_target_sizes)
 
                     score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
-                    score_filter_labels = [result["labels"][(result["scores"] > args.psn_score_th).nonzero().flatten()]
-                                           for result in results]
+                    score_filter_labels = [result["labels"]
+                                           [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
                     psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
                     decoded_queries = [outputs["queries"][0, t][p_idx] for t, p_idx in enumerate(psn_indices)]
                     psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
 
-                    psn_queries = psn_encoder(torch.cat(decoded_queries, 0))
-                    psn_queries = arrange_list(psn_indices, psn_queries)
+                    psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
+                    psn_embedding = arrange_list(psn_indices, psn_embedding)
 
-                    # process per frame
-                    for t, (d_queries, p_queries) in enumerate(zip(decoded_queries, psn_queries)):
+                    for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                         frame_idx = args.n_frames * clip_idx + t
-                        add_query_to_list(person_lists, d_queries, p_queries, frame_idx,
-                                          psn_indices[t], psn_boxes[t], end_list_idx_set, sim_th=args.sim_th)
+                        tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
 
-            # filter person list
-            person_lists = [person_list for person_list in person_lists if len(person_list["idx_of_p_queries"]) > 8]
+            tube.filter()
 
             # give a label for each query in person list
             video_ano_fixed = fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-            give_label(video_ano_fixed, person_lists, args.n_classes, args.iou_th)
+            give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
 
             # train head
-            if len(person_lists) == 0:
+            if len(tube.tubes) == 0:
                 continue
-            action_label = [person_list["action_label"] for person_list in person_lists]
-            queries_list = [person_list["d_query"] for person_list in person_lists]
+            action_label = [person_list["action_label"] for person_list in tube.tubes]
+            queries_list = [person_list["d_query"] for person_list in tube.tubes]
             if video_idx % args.iter_update == 0:
                 optimizer_head.zero_grad()
             total_loss = torch.zeros(1).to(device)
@@ -173,11 +170,11 @@ def main(args):
                 label = torch.Tensor(label).to(torch.int64).to(device)
                 outputs = action_head(input_queries)
                 loss = head_criterion(outputs, label)
-                give_pred(person_lists[list_idx], outputs)
+                give_pred(tube.tubes[list_idx], outputs)
                 total_loss += loss
             total_loss = total_loss / (args.iter_update * len(queries_list))
             total_loss.backward()
-            acc_dict = calc_acc(person_lists, args.n_classes)
+            acc_dict = calc_acc(tube.tubes, args.n_classes)
             if video_idx % args.iter_update == args.iter_update - 1:
                 optimizer_head.step()
 
@@ -198,7 +195,7 @@ def main(args):
             continue
             video_path = "/".join(img_paths[0].parts[-3:-1])
             video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-            make_video_with_tube(video_path, person_lists, video_ano)
+            make_video_with_tube(video_path, tube.tubes, video_ano)
             os.remove("test.avi")
         ex.log_metric("train_action_loss", train_log["action_loss"].avg, step=epoch)
         ex.log_metric("train_action_acc1", train_log["action_acc1"].avg, step=epoch)
@@ -213,8 +210,7 @@ def main(args):
             pbar_videos.set_description("[Validation]")
             for video_idx, (img_paths, video_ano) in pbar_videos:
                 sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-                person_lists = []
-                end_list_idx_set = set()
+                tube = ActionTube()
 
                 pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
                 pbar_video.set_description("[Frames Iteration]")
@@ -233,23 +229,22 @@ def main(args):
                     decoded_queries = [outputs["queries"][0, t][p_idx] for t, p_idx in enumerate(psn_indices)]
                     psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
 
-                    psn_queries = psn_encoder(torch.cat(decoded_queries, 0))
-                    psn_queries = arrange_list(psn_indices, psn_queries)
+                    psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
+                    psn_embedding = arrange_list(psn_indices, psn_embedding)
 
-                    for t, (d_queries, p_queries) in enumerate(zip(decoded_queries, psn_queries)):
+                    for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                         frame_idx = args.n_frames * clip_idx + t
-                        add_query_to_list(person_lists, d_queries, p_queries, frame_idx,
-                                          psn_indices[t], psn_boxes[t], end_list_idx_set, sim_th=args.sim_th)
+                        tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
 
-                person_lists = [person_list for person_list in person_lists if len(person_list["idx_of_p_queries"]) > 8]
+                tube.filter()
 
                 video_ano_fixed = fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-                give_label(video_ano_fixed, person_lists, args.n_classes, args.iou_th)
+                give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
 
-                if len(person_lists) == 0:
+                if len(tube.tubes) == 0:
                     continue
-                action_label = [person_list["action_label"] for person_list in person_lists]
-                queries_list = [person_list["d_query"] for person_list in person_lists]
+                action_label = [person_list["action_label"] for person_list in tube.tubes]
+                queries_list = [person_list["d_query"] for person_list in tube.tubes]
 
                 total_loss = torch.zeros(1).to(device)
                 for list_idx, (input_queries, label) in enumerate(zip(queries_list, action_label)):
@@ -257,10 +252,10 @@ def main(args):
                     label = torch.Tensor(label).to(torch.int64).to(device)
                     outputs = action_head(input_queries)
                     loss = head_criterion(outputs, label)
-                    give_pred(person_lists[list_idx], outputs)
+                    give_pred(tube.tubes[list_idx], outputs)
                     total_loss += loss
                 total_loss = total_loss / (args.iter_update * len(queries_list))
-                acc_dict = calc_acc(person_lists, args.n_classes)
+                acc_dict = calc_acc(tube.tubes, args.n_classes)
 
                 val_log["action_loss"].update(total_loss.item())
                 val_log["action_acc1"].update(acc_dict["acc1"].item())
@@ -269,6 +264,14 @@ def main(args):
                     continue
                 val_log["action_acc1_wo_noaction"].update(acc_dict["acc1_wo"].item())
                 val_log["action_acc5_wo_noaction"].update(acc_dict["acc5_wo"].item())
+
+                ## make new video with tube ##
+                continue
+                video_path = "/".join(img_paths[0].parts[-3:-1])
+                video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
+                make_video_with_tube(video_path, tube.tubes, video_ano)
+                exit()
+                os.remove("test.avi")
 
         ex.log_metric("val_action_loss", val_log["action_loss"].avg, step=epoch)
         ex.log_metric("val_action_acc1", val_log["action_acc1"].avg, step=epoch)
@@ -293,63 +296,6 @@ def arrange_list(x, y):
         result.append(y[:size])
         y = y[size:]
     return result
-
-
-def add_query_to_list(person_lists, d_queries, p_queries, frame_idx, psn_indices, psn_boxes, end_list_idx_set, sim_th=0.7):
-    diff_list = [frame_idx - person_list["idx_of_p_queries"][-1][0] for person_list in person_lists]
-    for list_idx, d in enumerate(diff_list):
-        if d >= 8:
-            end_list_idx_set.add(list_idx)
-
-    if len(person_lists) == 0:
-        for idx, (d_query, p_query) in enumerate(zip(d_queries, p_queries)):
-            query_idx = psn_indices[idx].item()
-            person_lists.append({"d_query": [d_query],
-                                 "p_query": [p_query],
-                                 "idx_of_p_queries": [(frame_idx, query_idx)],
-                                 "bbox": [psn_boxes[idx]]})
-    else:
-        sim_scores = get_sim_scores(person_lists, p_queries)
-        indices_generator = find_max_indices(sim_scores.cpu(), end_list_idx_set)
-        for i, j in indices_generator:
-            query_idx = psn_indices[i].item()
-            if (sim_scores[i, j] > sim_th) and (j != -1):
-                person_lists[j]["d_query"].append(d_queries[i])
-                person_lists[j]["p_query"].append(p_queries[i])
-                person_lists[j]["idx_of_p_queries"].append((frame_idx, query_idx))
-                person_lists[j]["bbox"].append(psn_boxes[i])
-            else:
-                person_lists.append({"d_query": [d_queries[i]],
-                                     "p_query": [p_queries[i]],
-                                     "idx_of_p_queries": [(frame_idx, query_idx)],
-                                     "bbox": [psn_boxes[i]]})
-
-
-def get_sim_scores(person_lists, psn_features_frame):
-    final_queries_in_spl = torch.stack([person_list["p_query"][-1] for person_list in person_lists])
-    dot_product = torch.mm(psn_features_frame, final_queries_in_spl.t())
-    norm_frame_p_f_queries = torch.norm(psn_features_frame, dim=1).unsqueeze(1)
-    norm_final_queries_in_spl = torch.norm(final_queries_in_spl, dim=1).unsqueeze(0)
-    sim_scores = dot_product / (norm_frame_p_f_queries * norm_final_queries_in_spl)
-    return sim_scores
-
-
-def find_max_indices(tensor, end_list_idx_set):
-    used_i_list = []
-    for j in end_list_idx_set:
-        tensor[:, j] = -1
-    for _ in range(tensor.size(0)):
-        i, j = np.unravel_index(np.argmax(tensor), tensor.shape)
-        if tensor[i, j] != -1:
-            used_i_list.append(i)
-            tensor[i, :] = -1
-            tensor[:, j] = -1
-            yield i, j
-        else:
-            break  # そのフレームにおいて全てのリストにクエリが割り当てられた場合は強制的に新しい人物とする
-    not_used_i_list = [x for x in range(tensor.size(0)) if x not in used_i_list]
-    for i in not_used_i_list:
-        yield i, -1
 
 
 def fix_ano_scale(video_ano, resize_scale=512 / 320):
