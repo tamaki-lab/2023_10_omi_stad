@@ -68,3 +68,32 @@ class ActionTube:
         # print(f"num_tubes(before filterling):{len(self.tubes)}")
         self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]
         # print(f"num_tubes(after filterling):{len(self.tubes)}")
+
+    def extract(self, tube, indices):
+        indices = torch.where(indices)[0]
+        frame_indices = [tube["idx_of_p_queries"][i][0] for i in indices]
+        boxes = [tube["bbox"][i] for i in indices]
+        return {frame_idx: bbox for frame_idx, bbox in zip(frame_indices, boxes)}
+
+    def split(self):
+        """split based on predicted action id"""
+        new_tubes = []
+        for tube in self.tubes:
+            new_tubes.extend([{"class": i.item(),
+                               "score": tube["action_score"][tube["action_id"] == i].mean().item(),
+                               "boxes": self.extract(tube, tube["action_id"] == i)}
+                             for i in tube["action_id"].unique()])
+        print("---")
+        print(len(self.tubes))
+        self.tubes = new_tubes
+        print(len(self.tubes))
+
+
+# def split_tensor(a):
+#     # bを計算
+#     b = np.argmax(a, axis=1)
+
+#     # 各要素が同じbの値を持つaの部分配列を取得
+#     c = [a[b == i].max(axis=1).tolist() for i in np.unique(b)]
+
+#     return c
