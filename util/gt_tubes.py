@@ -8,20 +8,36 @@ import av
 import yaml
 
 
-def make_gt_tubes_ava(subset: str, params) -> Dict[str, list[Dict]]:
-    """raad annotation file (given in bbox) and make tube annotation
-    Args:
-        subset (str): "train" or "val"
-        params (_type_):
-    Returns:
-        Dict[str, list[Dict]]: {video_name:[{"class_id":class_id, "boxes":[{"frame_idx":bbox},...]},...]}
-            - key is video_name, value is list(tubes annotation)
-                - list length is num of tubes in one video
-                - The elements of the list are dict(keys are "class_id" and "boxes")
-                    - "class_id": class_id
-                    - "boxes": {"frame_idx: [x1,y1,x2,y2]}
-                        - dict length is len(tube) (=num of bbox)
-    """
+def make_gt_tubes_ucf(subset: str, params: Dict) -> Dict[str, list[Dict]]:
+    """raad annotation file and make tube annotation"""
+
+    video_list_txt = params[subset + "_videos_file_path"]
+    with open(video_list_txt) as f:
+        video_list = f.readlines()
+    video_list = [video.replace("\n", "") for video in video_list]
+
+    file_path = params["annotation_file_path"]
+    df = pd.read_json(file_path)
+
+    gt_tubes = {}
+    for video_name in video_list:
+        gt_tubes[video_name] = {}
+        for psn_id in range(len(df[video_name]["annotations"])):
+            sf = df[video_name]["annotations"][psn_id]["sf"]
+            bbox_list = df[video_name]["annotations"][psn_id]["boxes"]
+            cls_id = df[video_name]["annotations"][psn_id]["label"]
+            gt_tubes[video_name][psn_id] = {"cls_id": cls_id, "boxes": {}}
+            for j, box in enumerate(bbox_list):
+                box[2] = box[0] + box[2]
+                box[3] = box[1] + box[3]
+                gt_tubes[video_name][psn_id]["boxes"][sf + j] = box
+
+    return gt_tubes
+
+
+def make_gt_tubes_ava(subset: str, params: Dict) -> Dict[str, list[Dict]]:
+    """raad annotation file (given in bbox) and make tube annotation"""
+
     org_label_list_file = params["org_label_list_file_path"]
     label_list_file = params["label_list_file_path"]
     action_id2id = {}  # csv annofile id to classification id(only used class)
@@ -84,7 +100,6 @@ def make_gt_tubes_ava(subset: str, params) -> Dict[str, list[Dict]]:
 
 def get_ava_scale(videos_dir: str) -> Dict[str, Tuple[int, int]]:
     """
-
     Args:
         videos_dir (str): video directory
 
@@ -106,16 +121,41 @@ def get_ava_scale(videos_dir: str) -> Dict[str, Tuple[int, int]]:
     return scale_dict
 
 
+def make_gt_tubes(dataset: str, subset: str, params: Dict) -> Dict[str, list[Dict]]:
+    """raad annotation file (given in bbox) and make tube annotation
+    Args:
+        subset (str): "jhmdb21", "ucf101-24", "ava"
+        subset (str): "train" or "val"
+        params (Dict):
+    Returns:
+        Dict[str, list[Dict]]: {video_name:[{"class_id":class_id, "boxes":[{"frame_idx":bbox},...]},...]}
+            - key is video_name, value is list(tubes annotation)
+                - list length is num of tubes in one video
+                - The elements of the list are dict(keys are "class_id" and "boxes")
+                    - "class_id": class_id
+                    - "boxes": {"frame_idx": [x1,y1,x2,y2]}
+                        - dict length is len(tube) (=num of bbox)
+    """
+
+    if dataset == "ucf101-24":
+        return make_gt_tubes_ucf(subset, params)
+    elif dataset == "ava":
+        return make_gt_tubes_ava(subset, params)
+    else:
+        raise NameError(f"Invalide dataset name: {dataset}")
+
+
 if __name__ == "__main__":
     ### print debug ###
-    ## AVA ##
-    # params = yaml.safe_load(open("../datasets/projects/ava.yml"))
-    # video_idx = 2
-    # gt_tubes = make_gt_tubes_ava("val", params)
-    # video_name = sorted(list(gt_tubes.keys()))[video_idx]
 
-    # print(video_name)
-    # print(f'num of tubes: {len(gt_tubes[video_name])}')
-    # print(f'cls_id: {gt_tubes[video_name][0]["cls_id"]}')
-    # print(f'boxes: {gt_tubes[video_name][0]["boxes"]}')
-    # print(sum([len(tubes_in_video) for _, tubes_in_video in gt_tubes.items()]))
+    dataset = "ucf101-24"
+    params = yaml.safe_load(open(f"../datasets/projects/{dataset}.yml"))
+    gt_tubes = make_gt_tubes(dataset, "val", params)
+
+    video_idx = 2
+    video_name = sorted(list(gt_tubes.keys()))[video_idx]
+    print(video_name)
+    print(f'num of tubes: {len(gt_tubes[video_name])}')
+    print(f'cls_id: {gt_tubes[video_name][0]["cls_id"]}')
+    print(f'boxes: {gt_tubes[video_name][0]["boxes"]}')
+    print(sum([len(tubes_in_video) for _, tubes_in_video in gt_tubes.items()]))
