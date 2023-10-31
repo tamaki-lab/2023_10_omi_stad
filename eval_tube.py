@@ -30,6 +30,8 @@ def get_args_parser():
     parser.add_argument('--load_epoch', default=100, type=int)
     parser.add_argument('--psn_score_th', default=0.7, type=float)
     parser.add_argument('--sim_th', default=0.7, type=float)
+    parser.add_argument('--iou_th', default=0.4, type=float)
+    parser.add_argument('--n_classes', default=24, type=int)
 
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
@@ -100,10 +102,16 @@ def main(args):
                 frame_idx = args.n_frames * clip_idx + t
                 tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
 
+        tube.filter()
+
+        video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
+        utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+
         # make new video with tube
         video_path = "/".join(img_paths[0].parts[-3:-1])
         video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-        make_video_with_tube(video_path, tube.tubes)
+        # make_video_with_tube(video_path, tube.tubes, video_ano=video_ano, plot_label=False)
+        make_video_with_tube(video_path, tube.tubes, video_ano=video_ano, plot_label=True)
         if video_idx == 0:
             exit()
         os.remove("test.avi")

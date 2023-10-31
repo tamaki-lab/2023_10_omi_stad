@@ -14,7 +14,7 @@ import copy
 
 from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
-from util.plot_utils import make_video_with_tube_ano
+from util.plot_utils import make_video_with_tube
 from util.box_ops import generalized_box_iou
 from models import build_model
 from models.person_encoder import PersonEncoder, SetInfoNce
@@ -146,7 +146,7 @@ def main(args):
                     psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
 
                     psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
-                    psn_embedding = arrange_list(psn_indices, psn_embedding)
+                    psn_embedding = utils.arrange_list(psn_indices, psn_embedding)
 
                     for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                         frame_idx = args.n_frames * clip_idx + t
@@ -155,8 +155,8 @@ def main(args):
             tube.filter()
 
             # give a label for each query in person list
-            video_ano_fixed = fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-            give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+            video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
+            utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
 
             # train head
             if len(tube.tubes) == 0:
@@ -171,11 +171,11 @@ def main(args):
                 label = torch.Tensor(label).to(torch.int64).to(device)
                 outputs = action_head(input_queries)
                 loss = head_criterion(outputs, label)
-                give_pred(tube.tubes[list_idx], outputs)
+                utils.give_pred(tube.tubes[list_idx], outputs)
                 total_loss += loss
             total_loss = total_loss / (args.iter_update * len(queries_list))
             total_loss.backward()
-            acc_dict = calc_acc(tube.tubes, args.n_classes)
+            acc_dict = utils.calc_acc(tube.tubes, args.n_classes)
             if video_idx % args.iter_update == args.iter_update - 1:
                 optimizer_head.step()
 
@@ -231,7 +231,7 @@ def main(args):
                     psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
 
                     psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
-                    psn_embedding = arrange_list(psn_indices, psn_embedding)
+                    psn_embedding = utils.arrange_list(psn_indices, psn_embedding)
 
                     for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                         frame_idx = args.n_frames * clip_idx + t
@@ -239,8 +239,8 @@ def main(args):
 
                 tube.filter()
 
-                video_ano_fixed = fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-                give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+                video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
+                utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
 
                 if len(tube.tubes) == 0:
                     continue
@@ -253,10 +253,10 @@ def main(args):
                     label = torch.Tensor(label).to(torch.int64).to(device)
                     outputs = action_head(input_queries)
                     loss = head_criterion(outputs, label)
-                    give_pred(tube.tubes[list_idx], outputs)
+                    utils.give_pred(tube.tubes[list_idx], outputs)
                     total_loss += loss
                 total_loss = total_loss / (args.iter_update * len(queries_list))
-                acc_dict = calc_acc(tube.tubes, args.n_classes)
+                acc_dict = utils.calc_acc(tube.tubes, args.n_classes)
 
                 val_log["action_loss"].update(total_loss.item())
                 val_log["action_acc1"].update(acc_dict["acc1"].item())
@@ -267,10 +267,10 @@ def main(args):
                 val_log["action_acc5_wo_noaction"].update(acc_dict["acc5_wo"].item())
 
                 ## make new video with tube ##
-                continue
+                # continue
                 video_path = "/".join(img_paths[0].parts[-3:-1])
                 video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-                make_video_with_tube_ano(video_path, tube.tubes, video_ano)
+                make_video_with_tube(video_path, tube.tubes, video_ano)
                 exit()
                 os.remove("test.avi")
 
@@ -284,80 +284,6 @@ def main(args):
         [log.reset() for _, log in val_log.items()]
         dir = args.check_dir + "/" + args.load_ex_name + "/head"
         utils.save_checkpoint(action_head, dir, args.write_ex_name, epoch)
-
-
-def arrange_list(x, y):
-    """
-    yの要素は変えずにxと同じリストの形にする
-    xは2重リスト,yはリストでその長さはxのサブリストの長さの和
-    """
-    result = []
-    for sublist in x:
-        size = len(sublist)
-        result.append(y[:size])
-        y = y[size:]
-    return result
-
-
-def fix_ano_scale(video_ano, resize_scale=512 / 320):
-    video_ano_fixed = copy.deepcopy(video_ano)
-    for frame_idx, frame_ano in video_ano.items():
-        for tube_idx, box_ano in frame_ano.items():
-            video_ano_fixed[frame_idx][tube_idx][:4] = [x * resize_scale for x in box_ano[:4]]
-    return video_ano_fixed
-
-
-def give_label(video_ano, person_lists, no_action_id=-1, iou_th=0.4):
-    for person_list in person_lists:
-        person_list["action_label"] = []
-        for i, (frame_idx, _) in enumerate(person_list["idx_of_p_queries"]):
-            if frame_idx in video_ano:
-                gt_ano = [ano for tube_idx, ano in video_ano[frame_idx].items()]
-                gt_boxes = torch.tensor(gt_ano)[:, :4]
-                iou = generalized_box_iou(person_list["bbox"][i].reshape(-1, 4), gt_boxes)
-                max_v, max_idx = torch.max(iou, dim=1)
-                if max_v.item() > iou_th:
-                    person_list["action_label"].append(gt_ano[max_idx][4])
-                else:
-                    person_list["action_label"].append(no_action_id)
-                continue
-            else:
-                person_list["action_label"].append(no_action_id)
-
-
-def give_pred(person_list, outputs):
-    person_list["action_pred"] = outputs.cpu().detach()
-
-
-def calc_acc(person_lists, n_classes):
-    acc_dict = {"acc1": torch.zeros(1),
-                "acc5": torch.zeros(1),
-                "acc1_wo": torch.zeros(1),
-                "acc5_wo": torch.zeros(1)}
-    n_all_wo = 0
-    for person_list in person_lists:
-        output = person_list["action_pred"]
-        label = person_list["action_label"]
-        label = torch.Tensor(label).to(torch.int64)
-        acc1, acc5 = utils.accuracy(output, label, topk=(1, 5))
-        acc_dict["acc1"] += acc1
-        acc_dict["acc5"] += acc5
-        if (label != n_classes).sum() == 0:
-            n_all_wo += 1
-            continue
-        else:
-            acc1_wo, acc5_wo = utils.accuracy(output[label != n_classes], label[label != n_classes], topk=(1, 5))
-            acc_dict["acc1_wo"] += acc1_wo
-            acc_dict["acc5_wo"] += acc5_wo
-    acc_dict["acc1"] = acc_dict["acc1"] / len(person_lists)
-    acc_dict["acc5"] = acc_dict["acc5"] / len(person_lists)
-    if len(person_lists) != n_all_wo:
-        acc_dict["acc1_wo"] = acc_dict["acc1_wo"] / (len(person_lists) - n_all_wo)
-        acc_dict["acc5_wo"] = acc_dict["acc5_wo"] / (len(person_lists) - n_all_wo)
-    else:
-        acc_dict["acc1_wo"] = -1
-        acc_dict["acc5_wo"] = -1
-    return acc_dict
 
 
 if __name__ == '__main__':

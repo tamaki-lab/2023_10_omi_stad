@@ -1,6 +1,8 @@
 from typing import Tuple, Dict
+import torch
 import numpy as np
 import torch
+
 from box_ops import tube_iou
 
 
@@ -146,26 +148,3 @@ def calc_video_map(
         video_ap.append(calc_video_ap(pred_tubes_class[class_idx], gt_tubes_class[class_idx], iou_thresh, num_complement))
 
     return video_ap
-
-
-if __name__ == "__main__":
-    ### print debug ###
-    test_pred_tubes = [["video_0", {"class": 0, "score": 0.2, "boxes": {"0": torch.tensor([0, 0, 100, 100]), "1": torch.tensor([0, 0, 100, 100])}}],
-                       ["video_0", {"class": 0, "score": 0.5, "boxes": {"0": torch.tensor([100, 100, 200, 200]), "1": torch.tensor([100, 100, 200, 200])}}],
-                       ["video_0", {"class": 1, "score": 0.2, "boxes": {"0": torch.tensor([0, 0, 100, 100]), "1": torch.tensor([0, 0, 100, 100])}}],
-                       ["video_0", {"class": 1, "score": 0.5, "boxes": {"0": torch.tensor([100, 100, 200, 200]), "1": torch.tensor([100, 100, 200, 200])}}],
-                       ["video_1", {"class": 0, "score": 0.5, "boxes": {"0": torch.tensor([100, 100, 200, 200]), "1": torch.tensor([100, 100, 200, 200])}}],
-                       ["video_1", {"class": 0, "score": 0.7, "boxes": {"0": torch.tensor([0, 0, 100, 100]), "1": torch.tensor([0, 0, 100, 100])}}]
-                       ]
-    test_gt_tubes = {"video_0": [{"class": 0, "boxes": {"0": torch.tensor([50, 50, 100, 100]), "1": torch.tensor([50, 50, 100, 100])}},
-                                 {"class": 0, "boxes": {"0": torch.tensor([100, 100, 200, 200]), "1": torch.tensor([100, 100, 200, 200])}},
-                                 {"class": 1, "boxes": {"0": torch.tensor([50, 50, 100, 100]), "1": torch.tensor([50, 50, 100, 100])}},
-                                 {"class": 1, "boxes": {"0": torch.tensor([100, 100, 200, 200]), "1": torch.tensor([100, 100, 200, 200])}}
-                                 ],
-                     "video_1": [{"class": 0, "boxes": {"0": torch.tensor([50, 50, 100, 100]), "1": torch.tensor([50, 50, 100, 100])}},
-                                 {"class": 0, "boxes": {"0": torch.tensor([100, 100, 200, 200])}}
-                                 ]
-                     }
-    video_ap_list = calc_video_map(test_pred_tubes, test_gt_tubes, iou_thresh=0.5, num_complement=11, num_class=5)
-    print(video_ap_list)
-    print(sum(video_ap_list) / len(video_ap_list))

@@ -169,64 +169,7 @@ def plot_pred_person_link(clip_sample, results, same_psn_idx_lists):
     plt.close()
 
 
-def make_video_with_tube(video_path, person_lists):
-    # color_map = random_colors(100)
-    color_map = get_color_list()
-
-    # filter person list
-    print(f"num_lists(before filterling):{len(person_lists)}")
-    person_lists = [person_list for person_list in person_lists if len(person_list["idx_of_p_queries"]) > 8]
-    print(f"num_lists(after filterling):{len(person_lists)}")
-
-    # make video
-    container = av.open(str(video_path))
-    stream = container.streams.video[0]
-
-    width = stream.width
-    height = stream.height
-    codec = stream.codec_context.name
-    base_rate = stream.base_rate
-    pix_fmt = stream.pix_fmt
-    resize_scale = max([width, height]) / 512
-
-    new_container = av.open("test.avi", mode="w")
-    new_stream = new_container.add_stream(codec, rate=base_rate)
-    new_stream.width = width
-    new_stream.height = height
-    new_stream.pix_fmt = pix_fmt
-
-    for frame_idx, frame in enumerate(container.decode(video=0)):
-        frame = frame.to_ndarray(format="rgb24")
-
-        for list_idx, person_list in enumerate(person_lists):
-            for idx, idx_of_query in enumerate(person_list["idx_of_p_queries"]):
-                if frame_idx > idx_of_query[0]:
-                    continue
-                elif frame_idx < idx_of_query[0]:
-                    break
-                else:
-                    box = person_list["bbox"][idx]
-                    x1, y1, x2, y2 = box * resize_scale
-                    x1 = int(max(min(x1, width), 0))
-                    x2 = int(max(min(x2, width), 0))
-                    y1 = int(max(min(y1, height), 0))
-                    y2 = int(max(min(y2, height), 0))
-                    # print(f"frame:{frame_idx}, list_idx:{list_idx}, query_idx:{idx}")
-
-                    cv2.rectangle(
-                        frame, pt1=(x1, y1), pt2=(x2, y2), color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
-                    )
-
-        frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
-        for packet in new_stream.encode(frame):
-            new_container.mux(packet)
-
-    for packet in new_stream.encode():
-        new_container.mux(packet)
-    new_container.close()
-
-
-def make_video_with_tube_ano(video_path, person_lists, video_ano, plot_label=True):
+def make_video_with_tube(video_path, tubes, video_ano, plot_label=True):
     # color_map = random_colors(100)
     color_map = get_color_list()
 
@@ -250,20 +193,20 @@ def make_video_with_tube_ano(video_path, person_lists, video_ano, plot_label=Tru
     for frame_idx, frame in enumerate(container.decode(video=0)):
         frame = frame.to_ndarray(format="rgb24")
 
-        for list_idx, person_list in enumerate(person_lists):
-            for idx, idx_of_query in enumerate(person_list["idx_of_p_queries"]):
+        for list_idx, tube in enumerate(tubes):
+            for idx, idx_of_query in enumerate(tube["idx_of_p_queries"]):
                 if frame_idx > idx_of_query[0]:
                     continue
                 elif frame_idx < idx_of_query[0]:
                     break
                 else:
-                    box = person_list["bbox"][idx]
+                    box = tube["bbox"][idx]
                     x1, y1, x2, y2 = box * resize_scale
                     x1 = int(max(min(x1, width), 0))
                     x2 = int(max(min(x2, width), 0))
                     y1 = int(max(min(y1, height), 0))
                     y2 = int(max(min(y2, height), 0))
-                    action_id = person_list["action_label"][idx]
+                    action_id = tube["action_label"][idx]
                     # print(f"frame:{frame_idx}, list_idx:{list_idx}, query_idx:{idx}")
 
                     cv2.rectangle(
@@ -275,6 +218,74 @@ def make_video_with_tube_ano(video_path, person_lists, video_ano, plot_label=Tru
                         fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
                         color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
                     )
+
+        if (plot_label) and (frame_idx in video_ano):
+            for tube_idx, frame_ano in video_ano[frame_idx].items():
+                x1, y1, x2, y2 = frame_ano[:4]
+                action_id = frame_ano[4]
+                cv2.rectangle(
+                    frame, pt1=(x1, y1), pt2=(x2, y2),
+                    color=(0, 0, 0), thickness=2, lineType=cv2.LINE_4, shift=0,
+                )
+                cv2.putText(
+                    frame, text=f"{tube_idx}, {action_id}", org=(x1, y1),
+                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                    color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
+                )
+
+        frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
+        for packet in new_stream.encode(frame):
+            new_container.mux(packet)
+
+    for packet in new_stream.encode():
+        new_container.mux(packet)
+    new_container.close()
+
+
+def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_label=True):
+    # color_map = random_colors(100)
+    color_map = get_color_list()
+
+    # make video
+    container = av.open(str(video_path))
+    stream = container.streams.video[0]
+
+    width = stream.width
+    height = stream.height
+    codec = stream.codec_context.name
+    base_rate = stream.base_rate
+    pix_fmt = stream.pix_fmt
+    resize_scale = max([width, height]) / 512
+
+    new_container = av.open("test.avi", mode="w")
+    new_stream = new_container.add_stream(codec, rate=base_rate)
+    new_stream.width = width
+    new_stream.height = height
+    new_stream.pix_fmt = pix_fmt
+
+    for frame_idx, frame in enumerate(container.decode(video=0)):
+        frame = frame.to_ndarray(format="rgb24")
+
+        for list_idx, tube in enumerate(tubes):
+            if frame_idx in tube["boxes"]:
+                box = tube["boxes"][frame_idx]
+                x1, y1, x2, y2 = box * resize_scale
+                x1 = int(max(min(x1, width), 0))
+                x2 = int(max(min(x2, width), 0))
+                y1 = int(max(min(y1, height), 0))
+                y2 = int(max(min(y2, height), 0))
+                action_id = tube["class"]
+                score = tube["score"]
+
+                cv2.rectangle(
+                    frame, pt1=(x1, y1), pt2=(x2, y2),
+                    color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                )
+                cv2.putText(
+                    frame, text=f"{label_list[action_id]}, score: {round(score,2)}, tube_idx:{list_idx}",
+                    org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                    color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
+                )
 
         if (plot_label) and (frame_idx in video_ano):
             for tube_idx, frame_ano in video_ano[frame_idx].items():
