@@ -14,6 +14,7 @@ from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
 from models import build_model
 from models.person_encoder import PersonEncoder, SetInfoNce
+from models.tube import ActionTube
 
 
 def get_args_parser():
@@ -27,6 +28,7 @@ def get_args_parser():
     parser.add_argument('--ex_name', default='noskip_th0.7', type=str)
     parser.add_argument('--load_epoch', default=100, type=int)
     parser.add_argument('--psn_score_th', default=0.7, type=float)
+    parser.add_argument('--sim_th', default=0.7, type=float)
 
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
@@ -61,39 +63,20 @@ def main(args):
 
     psn_encoder = PersonEncoder().to(device)
     psn_encoder.eval()
-    trained_psn_encoder_path = osp.join(args.check_dir, args.ex_name, f"epoch_{args.load_epoch}.pth")
+    trained_psn_encoder_path = osp.join(args.check_dir, args.ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
     psn_criterion = SetInfoNce().to(device)
     psn_criterion.eval()
 
-    train_loader = get_video_loader("ucf101-24", "train")
     val_loader = get_video_loader("ucf101-24", "val")
-
-    # train_log = {"psn_loss": utils.AverageMeter(),
-    #              "diff_psn_score": utils.AverageMeter(),
-    #              "same_psn_score": utils.AverageMeter(),
-    #              "total_psn_score": utils.AverageMeter()}
-    # val_log = {"psn_loss": utils.AverageMeter(),
-    #            "diff_psn_score": utils.AverageMeter(),
-    #            "same_psn_score": utils.AverageMeter(),
-    #            "total_psn_score": utils.AverageMeter()}
-
-    # ex = Experiment(
-    #     project_name="stal",
-    #     workspace="kazukiomi",
-    # )
-    # hyper_params = {
-    #     "ex_name": args.ex_name,
-    # }
-    # ex.log_parameters(hyper_params)
 
     pbar_videos = tqdm(enumerate(val_loader), total=len(val_loader), leave=False)
     for video_idx, (img_paths, video_ano) in pbar_videos:
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        person_lists = []
-        end_list_idx_set = set()
+        tube = ActionTube()
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
+        pbar_video.set_description("[Frames Iteration]")
         for clip_idx, (samples, targets) in pbar_video:
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -103,24 +86,25 @@ def main(args):
             results = postprocessors['bbox'](outputs, orig_target_sizes)
 
             score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
-            score_filter_labels = [result["labels"][(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
+            score_filter_labels = [result["labels"]
+                                   [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
             psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
-            psn_queries = [outputs["queries"][0, t][p_idx] for t, p_idx in enumerate(psn_indices)]
-            psn_boxes = [result["boxes"][p_idx] for result, p_idx in zip(results, psn_indices)]
+            decoded_queries = [outputs["queries"][0, t][p_idx] for t, p_idx in enumerate(psn_indices)]
+            psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
 
-            psn_queries = torch.cat(psn_queries, 0)
+            psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
+            psn_embedding = arrange_list(psn_indices, psn_embedding)
 
-            psn_features = psn_encoder(psn_queries)
-            psn_features = arrange_list(psn_indices, psn_features)
-
-            for t, psn_features_frame in enumerate(psn_features):
+            for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                 frame_idx = args.n_frames * clip_idx + t
-                add_query_to_list(person_lists, psn_features_frame, frame_idx, psn_indices[t], psn_boxes[t], end_list_idx_set)
+                tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
 
         # make new video with tube
         video_path = "/".join(img_paths[0].parts[-3:-1])
         video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-        make_video_with_tube(video_path, person_lists)
+        make_video_with_tube(video_path, tube.tubes)
+        if video_idx == 0:
+            exit()
         os.remove("test.avi")
         continue
 
@@ -136,56 +120,6 @@ def arrange_list(x, y):
         result.append(y[:size])
         y = y[size:]
     return result
-
-
-def add_query_to_list(person_lists, psn_features_frame, frame_idx, psn_indices, psn_boxes, end_list_idx_set):
-    diff_list = [frame_idx - person_list["idx_of_p_queries"][-1][0] for person_list in person_lists]
-    for list_idx, d in enumerate(diff_list):
-        if d >= 8:
-            end_list_idx_set.add(list_idx)
-
-    if len(person_lists) == 0:
-        for idx, psn_feature in enumerate(psn_features_frame):
-            query_idx = psn_indices[idx].item()
-            person_lists.append({"query": [psn_feature], "idx_of_p_queries": [(frame_idx, query_idx)], "bbox": [psn_boxes[idx].cpu()]})
-    else:
-        sim_scores = get_sim_scores(person_lists, psn_features_frame)
-        indices_generator = find_max_indices(sim_scores.cpu().detach(), end_list_idx_set)
-        for i, j in indices_generator:
-            query_idx = psn_indices[i].item()
-            if (sim_scores[i, j] > args.psn_score_th) and (j != -1):
-                person_lists[j]["query"].append(psn_features_frame[i])
-                person_lists[j]["idx_of_p_queries"].append((frame_idx, query_idx))
-                person_lists[j]["bbox"].append(psn_boxes[i].cpu())
-            else:
-                person_lists.append({"query": [psn_features_frame[i]], "idx_of_p_queries": [(frame_idx, query_idx)], "bbox": [psn_boxes[i].cpu()]})
-
-
-def get_sim_scores(person_lists, psn_features_frame):
-    final_queries_in_spl = torch.stack([person_list["query"][-1] for person_list in person_lists])
-    dot_product = torch.mm(psn_features_frame, final_queries_in_spl.t())
-    norm_frame_p_f_queries = torch.norm(psn_features_frame, dim=1).unsqueeze(1)
-    norm_final_queries_in_spl = torch.norm(final_queries_in_spl, dim=1).unsqueeze(0)
-    sim_scores = dot_product / (norm_frame_p_f_queries * norm_final_queries_in_spl)
-    return sim_scores
-
-
-def find_max_indices(tensor, end_list_idx_set):
-    used_i_list = []
-    for j in end_list_idx_set:
-        tensor[:, j] = -1
-    for _ in range(tensor.size(0)):
-        i, j = np.unravel_index(np.argmax(tensor), tensor.shape)
-        if tensor[i, j] != -1:
-            used_i_list.append(i)
-            tensor[i, :] = -1
-            tensor[:, j] = -1
-            yield i, j
-        else:
-            break  # そのフレームにおいて全てのリストにクエリが割り当てられた場合は強制的に新しい人物とする
-    not_used_i_list = [x for x in range(tensor.size(0)) if x not in used_i_list]
-    for i in not_used_i_list:
-        yield i, -1
 
 
 def make_video_with_tube(video_path, person_lists):
