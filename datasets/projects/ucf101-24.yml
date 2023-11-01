@@ -4,6 +4,7 @@ train_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/sh
 val_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/UCF101-24/val/"
 
 dataset_path: "/mnt/NVMe1TB/dataset/UCF101-24/rgb-images"
+dataset_path_video: "/mnt/NAS-TVS872XT/dataset/UCF101/video"
 
 train_videos_file_path: "/mnt/NVMe1TB/dataset/UCF101-24/Annotations-UCF/trainlist_video.txt"
 val_videos_file_path: "/mnt/NVMe1TB/dataset/UCF101-24/Annotations-UCF/testlist_video.txt"

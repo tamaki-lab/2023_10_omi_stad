@@ -4,6 +4,7 @@ train_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/sh
 val_shards_path: "/mnt/HDD12TB-1/omi/2022_11_omi_stal_multi_domain/datasets/shards/JHMDB/val/"
 
 dataset_path: "/mnt/NVMe1TB/dataset/JHMDB/Frames"
+dataset_path_video: "/mnt/NAS-TVS872XT/dataset/JHMDB21/dataset/JHMDB_video"
 
 train_videos_file_path: "/mnt/NVMe1TB/dataset/JHMDB/split/trainlist1.txt"
 val_videos_file_path: "/mnt/NVMe1TB/dataset/JHMDB/split/testlist1.txt"
