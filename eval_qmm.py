@@ -9,6 +9,7 @@ import av
 import cv2
 import numpy as np
 import torch
+import yaml
 
 from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
@@ -25,6 +26,7 @@ def get_args_parser():
     parser.add_argument('--n_frames', default=8, type=int)
 
     # setting
+    parser.add_argument('--dataset', default='ucf101-24', type=str)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='noskip_th0.7', type=str)
     parser.add_argument('--load_epoch', default=100, type=int)
@@ -49,6 +51,9 @@ def get_args_parser():
 
 @torch.no_grad()
 def main(args):
+    params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
+    params["label_list"].append("no action")
+
     device = torch.device(f"cuda:{args.device}")
 
     seed = args.seed + utils.get_rank()
@@ -85,7 +90,7 @@ def main(args):
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
             outputs = detr(samples)
 
-            orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+            orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
             results = postprocessors['bbox'](outputs, orig_target_sizes)
 
             score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
@@ -104,16 +109,12 @@ def main(args):
 
         tube.filter()
 
-        video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-        utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+        utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
 
         # make new video with tube
         video_path = "/".join(img_paths[0].parts[-3:-1])
         video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-        # make_video_with_tube(video_path, tube.tubes, video_ano=video_ano, plot_label=False)
-        make_video_with_tube(video_path, tube.tubes, video_ano=video_ano, plot_label=True)
-        if video_idx == 0:
-            exit()
+        make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
         continue
 

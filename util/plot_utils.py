@@ -169,7 +169,7 @@ def plot_pred_person_link(clip_sample, results, same_psn_idx_lists):
     plt.close()
 
 
-def make_video_with_tube(video_path, tubes, video_ano, plot_label=True):
+def make_video_with_tube(video_path, label_list, tubes, video_ano, plot_label=True):
     # color_map = random_colors(100)
     color_map = get_color_list()
 
@@ -201,20 +201,19 @@ def make_video_with_tube(video_path, tubes, video_ano, plot_label=True):
                     break
                 else:
                     box = tube["bbox"][idx]
-                    x1, y1, x2, y2 = box * resize_scale
+                    x1, y1, x2, y2 = box
                     x1 = int(max(min(x1, width), 0))
                     x2 = int(max(min(x2, width), 0))
                     y1 = int(max(min(y1, height), 0))
                     y2 = int(max(min(y2, height), 0))
                     action_id = tube["action_label"][idx]
-                    # print(f"frame:{frame_idx}, list_idx:{list_idx}, query_idx:{idx}")
 
                     cv2.rectangle(
                         frame, pt1=(x1, y1), pt2=(x2, y2),
                         color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
                     )
                     cv2.putText(
-                        frame, text=f"{list_idx}, {action_id}", org=(x1, y1),
+                        frame, text=f"label: {label_list[action_id]}, idx: {list_idx}", org=(x1, y1),
                         fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
                         color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
                     )
@@ -228,7 +227,7 @@ def make_video_with_tube(video_path, tubes, video_ano, plot_label=True):
                     color=(0, 0, 0), thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
                 cv2.putText(
-                    frame, text=f"{tube_idx}, {action_id}", org=(x1, y1),
+                    frame, text=f"{label_list[action_id]}, {tube_idx}", org=(x1, y1),
                     fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
                     color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
                 )

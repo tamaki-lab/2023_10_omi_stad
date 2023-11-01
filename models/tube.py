@@ -4,7 +4,7 @@ import numpy as np
 
 
 class ActionTube:
-    def __init__(self, video_name, sim_th=0.7, end_consecutive_frames=8):
+    def __init__(self, video_name=None, sim_th=0.7, end_consecutive_frames=8):
         self.video_name = video_name
         self.tubes = []
         self.end_idx = set()

@@ -135,7 +135,7 @@ def main(args):
                     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
                     outputs = detr(samples)
 
-                    orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+                    orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
                     results = postprocessors['bbox'](outputs, orig_target_sizes)
 
                     score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
@@ -154,9 +154,8 @@ def main(args):
 
             tube.filter()
 
-            # give a label for each query in person list
-            video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-            utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+            ## give a label for each query in person list ##
+            utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
 
             # train head
             if len(tube.tubes) == 0:
@@ -220,7 +219,7 @@ def main(args):
                     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
                     outputs = detr(samples)
 
-                    orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+                    orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
                     results = postprocessors['bbox'](outputs, orig_target_sizes)
 
                     score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
@@ -239,8 +238,7 @@ def main(args):
 
                 tube.filter()
 
-                video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-                utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+                utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
 
                 if len(tube.tubes) == 0:
                     continue

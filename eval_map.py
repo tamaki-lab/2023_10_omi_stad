@@ -93,8 +93,7 @@ def main(args):
 
         tube.filter()
 
-        video_ano_fixed = utils.fix_ano_scale(video_ano, resize_scale=512 / 320)  # TODO change
-        utils.give_label(video_ano_fixed, tube.tubes, args.n_classes, args.iou_th)
+        utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
 
         if len(tube.tubes) == 0:
             continue
@@ -126,8 +125,9 @@ def main(args):
     gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
 
     video_ap = calc_video_map(pred_tubes, gt_tubes, args.n_classes)
-    print(video_ap)
-    print(sum(video_ap) / len(video_ap))
+    for class_name, ap in zip(params["label_list"], video_ap):
+        print(f"{class_name}: {ap}")
+    print(f"v-mAP: {sum(video_ap) / len(video_ap)}")
 
 
 def get_args_parser():
