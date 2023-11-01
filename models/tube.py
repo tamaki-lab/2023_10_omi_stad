@@ -4,7 +4,8 @@ import numpy as np
 
 
 class ActionTube:
-    def __init__(self, sim_th=0.7, end_consecutive_frames=8):
+    def __init__(self, video_name, sim_th=0.7, end_consecutive_frames=8):
+        self.video_name = video_name
         self.tubes = []
         self.end_idx = set()
         self.sim_th = sim_th
@@ -65,6 +66,7 @@ class ActionTube:
             yield i, -1
 
     def filter(self, filter_length=8):
+        """ exclude short tube """
         # print(f"num_tubes(before filterling):{len(self.tubes)}")
         self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]
         # print(f"num_tubes(after filterling):{len(self.tubes)}")
@@ -76,24 +78,13 @@ class ActionTube:
         return {frame_idx: bbox for frame_idx, bbox in zip(frame_indices, boxes)}
 
     def split(self):
-        """split based on predicted action id"""
+        """ split tube based on predicted action id """
         new_tubes = []
         for tube in self.tubes:
-            new_tubes.extend([{"class": i.item(),
-                               "score": tube["action_score"][tube["action_id"] == i].mean().item(),
-                               "boxes": self.extract(tube, tube["action_id"] == i)}
-                             for i in tube["action_id"].unique()])
-        print("---")
-        print(len(self.tubes))
+            new_tubes.extend([(
+                self.video_name,
+                {"class": i.item(),
+                 "score": tube["action_score"][tube["action_id"] == i].mean().item(),
+                 "boxes": self.extract(tube, tube["action_id"] == i)})
+                for i in tube["action_id"].unique()])
         self.tubes = new_tubes
-        print(len(self.tubes))
-
-
-# def split_tensor(a):
-#     # bを計算
-#     b = np.argmax(a, axis=1)
-
-#     # 各要素が同じbの値を持つaの部分配列を取得
-#     c = [a[b == i].max(axis=1).tolist() for i in np.unique(b)]
-
-#     return c

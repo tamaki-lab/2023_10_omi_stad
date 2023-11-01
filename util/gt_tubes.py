@@ -1,5 +1,6 @@
 from typing import Tuple, Dict
 import pathlib
+import torch
 from pathlib import Path
 import os.path as osp
 import pandas as pd
@@ -26,11 +27,14 @@ def make_gt_tubes_ucf(subset: str, params: Dict) -> Dict[str, list[Dict]]:
             sf = df[video_name]["annotations"][psn_id]["sf"]
             bbox_list = df[video_name]["annotations"][psn_id]["boxes"]
             cls_id = df[video_name]["annotations"][psn_id]["label"]
-            gt_tubes[video_name][psn_id] = {"cls_id": cls_id, "boxes": {}}
+            gt_tubes[video_name][psn_id] = {"class": cls_id, "boxes": {}}
             for j, box in enumerate(bbox_list):
                 box[2] = box[0] + box[2]
                 box[3] = box[1] + box[3]
-                gt_tubes[video_name][psn_id]["boxes"][sf + j] = box
+                gt_tubes[video_name][psn_id]["boxes"][sf + j] = torch.Tensor(box)
+
+    for video_name, tubes_in_video in gt_tubes.copy().items():
+        gt_tubes[video_name] = [tube_ano for tube_key, tube_ano in tubes_in_video.items()]
 
     return gt_tubes
 
@@ -89,7 +93,7 @@ def make_gt_tubes_ava(subset: str, params: Dict) -> Dict[str, list[Dict]]:
         # 同一人物かつ同一行動を確認するためのキー
         key_name = str(psn_id) + "-" + str(cls_id)
         if key_name not in gt_tubes[video_name]:
-            gt_tubes[video_name][key_name] = {"cls_id": cls_id, "boxes": {}}
+            gt_tubes[video_name][key_name] = {"class": cls_id, "boxes": {}}
         gt_tubes[video_name][key_name]["boxes"][sec] = [x1, y1, x2, y2]
 
     for video_name, tubes_in_video in gt_tubes.copy().items():

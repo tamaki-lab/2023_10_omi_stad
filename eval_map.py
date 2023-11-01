@@ -18,6 +18,8 @@ from models import build_model
 from models.person_encoder import PersonEncoder, SetInfoNce
 from models.action_head import ActionHead
 from models.tube import ActionTube
+from util.gt_tubes import make_gt_tubes
+from util.video_map import calc_video_map
 
 
 @torch.no_grad()
@@ -53,12 +55,17 @@ def main(args):
 
     val_loader = get_video_loader("ucf101-24", "val", shuffle=False)
 
-    action_head.eval()
+    pred_tubes = []
+    video_names = []
+    total_tubes = 0
+
     pbar_videos = tqdm(enumerate(val_loader), total=len(val_loader), leave=False)
     pbar_videos.set_description("[Validation]")
     for video_idx, (img_paths, video_ano) in pbar_videos:
+        video_name = "/".join(img_paths[0].parts[-3: -1])
+        video_names.append(video_name)
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTube()
+        tube = ActionTube(video_name)
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         pbar_video.set_description("[Frames Iteration]")
@@ -67,7 +74,7 @@ def main(args):
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
             outputs = detr(samples)
 
-            orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+            orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
             results = postprocessors['bbox'](outputs, orig_target_sizes)
 
             score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
@@ -99,12 +106,28 @@ def main(args):
             utils.give_pred(tube.tubes[list_idx], outputs)
 
         ## make new video with action tube ##
-        # continue
-        video_path = "/".join(img_paths[0].parts[-3: -1])
-        video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
         tube.split()
-        make_video_with_actiontube(video_path, params["label_list"], tube.tubes, video_ano, plot_label=False)
+        pred_tubes.append(tube)
+        total_tubes += len(tube.tubes)
+        pbar_videos.set_postfix_str(f'total_tubes: {total_tubes}, n_tubes: {len(tube.tubes)}')
+        continue
+        video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
+        make_video_with_actiontube(video_path, params["label_list"], tube.tubes, video_ano, plot_label=True)
+        # make_video_with_actiontube(video_path, params["label_list"], tube.tubes, video_ano, plot_label=False)
+        # exit()
         os.remove("test.avi")
+
+    pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
+    print(len(pred_tubes))
+    pred_tubes = [tube for tube in pred_tubes if tube[1]["class"] != args.n_classes]
+    print(len(pred_tubes))
+
+    gt_tubes = make_gt_tubes(args.dataset, "val", params)
+    gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
+
+    video_ap = calc_video_map(pred_tubes, gt_tubes, args.n_classes)
+    print(video_ap)
+    print(sum(video_ap) / len(video_ap))
 
 
 def get_args_parser():

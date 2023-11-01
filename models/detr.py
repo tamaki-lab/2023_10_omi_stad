@@ -283,7 +283,9 @@ class PostProcess(nn.Module):
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+        max_v = torch.max(img_h, img_w)
+        scale_fct = torch.stack([max_v, max_v, max_v, max_v], dim=1)    # TODO check
+        # scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
 
         results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]

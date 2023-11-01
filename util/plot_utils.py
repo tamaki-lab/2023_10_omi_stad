@@ -266,10 +266,11 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
     for frame_idx, frame in enumerate(container.decode(video=0)):
         frame = frame.to_ndarray(format="rgb24")
 
-        for list_idx, tube in enumerate(tubes):
+        for list_idx, (name, tube) in enumerate(tubes):
             if frame_idx in tube["boxes"]:
                 box = tube["boxes"][frame_idx]
-                x1, y1, x2, y2 = box * resize_scale
+                x1, y1, x2, y2 = box
+                # x1, y1, x2, y2 = box * resize_scale
                 x1 = int(max(min(x1, width), 0))
                 x2 = int(max(min(x2, width), 0))
                 y1 = int(max(min(y1, height), 0))
@@ -282,7 +283,8 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
                     color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
                 cv2.putText(
-                    frame, text=f"{label_list[action_id]}, score: {round(score,2)}, tube_idx:{list_idx}",
+                    frame, text=f"{label_list[action_id]}, {round(score,2)}, idx:{list_idx}",
+                    # frame, text=f"{label_list[action_id]}, score: {round(score,2)}, tube_idx:{list_idx}",
                     org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
                     color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
                 )

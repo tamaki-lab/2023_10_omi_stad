@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import torch
 
-from box_ops import tube_iou
+from util.box_ops import tube_iou
 
 
 def voc_ap(pr, use_07_metric=True, num_complement=11):
@@ -76,6 +76,7 @@ def calc_video_ap(
 
     pr = np.empty((len(pred_tubes) + 1, 2), dtype=np.float32)
     pr[0, 0] = 1.0
+    # pr[0, 0] = 0.0
     pr[0, 1] = 0.0
     tp = 0
     fn = sum([len(tubes) for _, tubes in gt_tubes.items()])
@@ -88,8 +89,7 @@ def calc_video_ap(
             tiou_list.append(tube_iou(pred_tube[1], gt_tube))
         if len(tiou_list) == 0:
             fp += 1
-            continue
-        if max(tiou_list) > tiou_thresh:
+        elif max(tiou_list) > tiou_thresh:
             tp += 1  # TODO 既に正解したものに対して2回目以降に正解した場合の考慮
             fn -= 1
         else:
@@ -105,9 +105,9 @@ def calc_video_ap(
 def calc_video_map(
         pred_tubes: list[Tuple[str, Dict]],
         gt_tubes: Dict[str, list[Dict]],
-        iou_thresh: float,
-        num_complement: int,
-        num_class: int) -> list[int]:
+        num_class: int,
+        tiou_thresh: float = 0.4,
+        num_complement: int = 11) -> list[int]:
     """Calculate video mAP
 
     Args:
@@ -121,10 +121,10 @@ def calc_video_map(
             {video_name:[{class:class_idx,boxes:{frameidx:tensor(shape=4)}}]}
             - key is video_name, value is list
                 - list length is num of tubes in one video
-                - list element is dict(keys are "class_id" and "boxes")
-        iou_thresh (float): Threshold of tIoU (extend IoU temporal)
-        num_complement (int): Num of points in precision-recall graph used in the calculation
+                - list element is dict(keys are "class" and "boxes")
         num_class (int): Num of classes
+        tiou_thresh (float): Threshold of tIoU (extend IoU temporal)
+        num_complement (int): Num of points in precision-recall graph used in the calculation
 
     Returns:
         list[int]: video ap list (v-mAP = sum(video_ap_list)/num_class)
@@ -145,6 +145,6 @@ def calc_video_map(
 
     video_ap = []
     for class_idx in range(num_class):
-        video_ap.append(calc_video_ap(pred_tubes_class[class_idx], gt_tubes_class[class_idx], iou_thresh, num_complement))
+        video_ap.append(calc_video_ap(pred_tubes_class[class_idx], gt_tubes_class[class_idx], tiou_thresh, num_complement))
 
     return video_ap
