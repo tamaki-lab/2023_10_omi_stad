@@ -45,54 +45,77 @@ class MLPDrop(nn.Module):
         return x
 
 
-class SetInfoNce(nn.Module):
-    def __init__(self):
+class NPairLoss(nn.Module):
+    def __init__(self, tau=1):
         super().__init__()
-        distance = distances.CosineSimilarity()
-        reducer = reducers.MeanReducer()
-        self.loss_func = losses.NTXentLoss(temperature=0.07, distance=distance, reducer=reducer)
-        self.mining_func = miners.BatchEasyHardMiner(
-            pos_strategy=miners.BatchEasyHardMiner.ALL,
-            neg_strategy=miners.BatchEasyHardMiner.ALL,
-            distance=distance
-        )
+        self.tau = tau
 
-    def make_posneg_label(self, indices_ex, bs, n_frames) -> torch.Tensor:
+    def forward(self, embs, labels):
+        device = labels.device
+        embs = embs / embs.norm(p=2, dim=-1, keepdim=True)
+        cos_sims = torch.matmul(embs, embs.t())
+        sims = torch.exp(cos_sims / self.tau)
+
+        loss = torch.zeros([1]).to(device)
+        n_no_pos = 0  # 正例のないアンカー数
+
+        for i, sim in enumerate(sims):
+            label_indices_without_i = torch.cat(
+                (torch.arange(i), torch.arange(i + 1, len(labels)))).to(device)  # i以外のインデックス列を生成
+            labels_wo_i = torch.index_select(labels, 0, label_indices_without_i)  # 自分自身以外のラベルを取得
+            sim_wo_i = torch.index_select(sim, 0, label_indices_without_i)  # 自分自身以外の類似度を取得
+
+            pos_indices = torch.nonzero(labels_wo_i == labels[i])  # 正例のインデックスを取得
+
+            if pos_indices.size(0) == 0:
+                n_no_pos += 1
+                continue
+
+            if pos_indices.dim() >= 2:
+                pos_indices = pos_indices.squeeze()
+
+            total_pos_sim = torch.index_select(sim_wo_i, 0, pos_indices).sum()  # 正例の類似度の和
+
+            total_sim = sim_wo_i.sum()  # 類似度の和
+
+            loss_i = -torch.log(total_pos_sim / total_sim)
+            loss += loss_i
+
+        if labels.shape[0] == n_no_pos:
+            loss = torch.zeros([1]).to(device)
+        else:
+            loss /= (labels.shape[0] - n_no_pos)
+
+        return loss
+
+    def label_rearrange(self, indices, bs, n_frames) -> torch.Tensor:
         """ Make positibe/negatibe label for metric learning
-        同一人物が同じインデックスとなるラベルを返す
+            同一人物が同じ値となるラベルを返す
 
-        Args:
-            indices_ex:
-                A list of size batch_size (bs*n_frames), containing tuples of (index_i, index_j, index_k) where:
-                    - index_i is the indices of the selected predictions (in order)
-                    - index_j is the indices of the corresponding selected targets (in order)
-                    - index_k is the indices of person_id (ただし1動画内で割り当てられたものであり,異なる動画における同じidは意味をなさない)
-            bs (int): batch size
-            n_frames (int): n_frames in clip
+            Args:
+                indices_ex:
+                    A list of size batch_size (bs*n_frames), containing index_k where:
+                        - index_k is the indices of person_id (ただし1動画内で割り当てられたものであり,異なる動画における同じidは意味をなさない)
+                bs (int): batch size (!=bs*n_frames)
+                n_frames (int): n_frames in clip
 
-        Returns:
-            (torch.Tensor):A tensor size is
-        """
-        n_label_in_clip = []    # n_label_in_clip[clip_idx] = n_label_in_clip
+            Returns:
+                (torch.Tensor):A tensor size is
+            """
+        # n_label_in_clip = []    # n_label_in_clip[clip_idx] = n_label_in_clip
         n_people_in_clip = []    # n_label_in_clip[clip_idx] = n_people_in_clip
-        same_psn_label = torch.Tensor([])
+        psn_label = torch.Tensor([])
 
         for i in range(bs):
-            clip_indices_ex = indices_ex[i * n_frames:(i + 1) * n_frames]
-            same_psn_label_in_clip = torch.cat([psn_id for _, _, psn_id in clip_indices_ex])
-            n_label_in_clip.append(same_psn_label_in_clip.size(0))
-            n_people_in_clip.append(torch.unique(same_psn_label_in_clip).size(0))
+            clip_indices = indices[i * n_frames:(i + 1) * n_frames]
+            psn_label_in_clip = torch.cat(clip_indices)
+            # n_label_in_clip.append(psn_label_in_clip.size(0))
+            n_people_in_clip.append(torch.unique(psn_label_in_clip).size(0))
 
-            sorted_list = sorted(torch.unique(same_psn_label_in_clip))
-            new_same_psn_label_in_clip = [sorted_list.index(x) + sum(n_people_in_clip[:-1]) for x in same_psn_label_in_clip]
-            same_psn_label = torch.cat((same_psn_label, torch.Tensor(new_same_psn_label_in_clip)))
-        return same_psn_label.to(torch.int64)
-
-    def forward(self, p_f_queries, indices_ex, bs, n_frames):
-        label = self.make_posneg_label(indices_ex, bs, n_frames)
-        miner_out = self.mining_func(p_f_queries, label)
-        loss = self.loss_func(p_f_queries, indices_tuple=miner_out)
-        return loss, label
+            sorted_list = sorted(torch.unique(psn_label_in_clip))
+            new_psn_label_in_clip = [sorted_list.index(x) + sum(n_people_in_clip[:-1]) for x in psn_label_in_clip]
+            psn_label = torch.cat((psn_label, torch.Tensor(new_psn_label_in_clip)))
+        return psn_label.to(torch.int64)
 
 
 def make_same_person_list(p_f_queries, same_person_label, n_gt_bbox_list, bs, n_frames):
