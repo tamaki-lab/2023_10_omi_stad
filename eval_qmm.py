@@ -14,8 +14,10 @@ import yaml
 from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
 from util.plot_utils import make_video_with_tube
+from util.gt_tubes import make_gt_tubes_ucf
+from util.box_ops import tube_iou
 from models import build_model
-from models.person_encoder import PersonEncoder, SetInfoNce
+from models.person_encoder import PersonEncoder, NPairLoss
 from models.tube import ActionTube
 
 
@@ -27,12 +29,13 @@ def get_args_parser():
 
     # setting
     parser.add_argument('--dataset', default='ucf101-24', type=str)
-    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--device', default=1, type=int)
     parser.add_argument('--ex_name', default='noskip_th0.7', type=str)
     parser.add_argument('--load_epoch', default=100, type=int)
     parser.add_argument('--psn_score_th', default=0.7, type=float)
     parser.add_argument('--sim_th', default=0.7, type=float)
     parser.add_argument('--iou_th', default=0.4, type=float)
+    parser.add_argument('--tiou_th', default=0.2, type=float)
     parser.add_argument('--n_classes', default=24, type=int)
 
     # Backbone
@@ -73,15 +76,21 @@ def main(args):
     psn_encoder.eval()
     trained_psn_encoder_path = osp.join(args.check_dir, args.ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
-    psn_criterion = SetInfoNce().to(device)
+    psn_criterion = NPairLoss().to(device)
     psn_criterion.eval()
 
     val_loader = get_video_loader("ucf101-24", "val")
 
+    pred_tubes = []
+    video_names = []
+    total_tubes = 0
+
     pbar_videos = tqdm(enumerate(val_loader), total=len(val_loader), leave=False)
     for video_idx, (img_paths, video_ano) in pbar_videos:
+        video_name = "/".join(img_paths[0].parts[-3: -1])
+        video_names.append(video_name)
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTube()
+        tube = ActionTube(video_name, args.sim_th)
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         pbar_video.set_description("[Frames Iteration]")
@@ -101,7 +110,7 @@ def main(args):
             psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
 
             psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
-            psn_embedding = arrange_list(psn_indices, psn_embedding)
+            psn_embedding = utils.arrange_list(psn_indices, psn_embedding)
 
             for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                 frame_idx = args.n_frames * clip_idx + t
@@ -112,24 +121,44 @@ def main(args):
         utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
 
         # make new video with tube
-        video_path = "/".join(img_paths[0].parts[-3:-1])
-        video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
+        pred_tubes.append(tube)
+        total_tubes += len(tube.tubes)
+        continue
+        video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
-        continue
+
+    gt_tubes = make_gt_tubes_ucf("val", params)
+    calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
 
-def arrange_list(x, y):
-    """
-    yの要素は変えずにxと同じリストの形にする
-    xは2重リスト,yはリストでその長さはxのサブリストの長さの和
-    """
-    result = []
-    for sublist in x:
-        size = len(sublist)
-        result.append(y[:size])
-        y = y[size:]
-    return result
+def calc_precision_recall(pred_tubes, gt_tubes, video_names, tiou_th):
+    pred_tubes = [(video_tubes.video_name, video_tubes.extract(tube)) for video_tubes in pred_tubes for tube in video_tubes.tubes]
+
+    for video_name, tubes_ano in gt_tubes.copy().items():
+        gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
+    gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}
+
+    n_gt = sum([len(tubes) for _, tubes in gt_tubes.items()])
+    tp = 0
+
+    for _, (video_name, pred_tube) in enumerate(pred_tubes):
+        video_gt_tubes = gt_tubes[video_name]
+        tiou_list = []
+        for _, gt_tube in enumerate(video_gt_tubes):
+            tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True))
+            if len(tiou_list) == 0:
+                continue
+            elif max(tiou_list) > tiou_th:
+                tp += 1  # TODO 既に正解したものに対して2回目以降に正解した場合の考慮
+            else:
+                continue
+
+    print(f"n_gt_tubes: {n_gt}")
+    print(f"n_pred_tubes: {len(pred_tubes)}")
+    print("-------")
+    print(f"Precision: {tp/len(pred_tubes)}")
+    print(f"Recall: {tp/n_gt}")
 
 
 if __name__ == '__main__':

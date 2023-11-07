@@ -7,12 +7,13 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
+
+from util.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
 from datasets.use_shards import get_loader
 import util.misc as utils
 from models import build_model
-from models.person_encoder import PersonEncoder, SetInfoNce
+from models.person_encoder import PersonEncoder, NPairLoss, make_same_person_list
 from util.plot_utils import plot_label_clip_boxes, plot_pred_clip_boxes, plot_pred_person_link
-from models.person_encoder import make_same_person_list
 
 
 def get_args_parser():
@@ -24,9 +25,10 @@ def get_args_parser():
     parser.add_argument('--n_frames', default=8, type=int)
 
     # setting
-    parser.add_argument('--epochs', default=100, type=int)
+    parser.add_argument('--epochs', default=70, type=int)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='test_ex', type=str)
+    parser.add_argument('--psn_score_th', default=0.5, type=float)
 
     # person encoder
     parser.add_argument('--lr_en', default=1e-4, type=float)
@@ -63,7 +65,7 @@ def main(args):
     criterion.eval()
 
     psn_encoder = PersonEncoder().to(device)
-    psn_criterion = SetInfoNce().to(device)
+    psn_criterion = NPairLoss().to(device)
 
     optimizer_en = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr_en, weight_decay=args.weight_decay_en)
     lr_scheduler_en = torch.optim.lr_scheduler.StepLR(optimizer_en, args.lr_drop_en)
@@ -96,7 +98,7 @@ def main(args):
     }
     ex.log_parameters(hyper_params)
 
-    # log loss before training
+    ## log loss before training ##
     evaluate(
         detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log
     )
@@ -121,7 +123,7 @@ def main(args):
     for epoch in pbar_epoch:
         pbar_epoch.set_description(f"[Epoch {epoch}]")
         train_one_epoch(
-            detr, criterion, data_loader_train, optimizer_en, device, epoch,
+            detr, criterion, postprocessors, data_loader_train, optimizer_en, device, epoch,
             psn_encoder, psn_criterion, train_log, ex)
 
         ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=epoch)
@@ -146,6 +148,7 @@ def main(args):
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+                    postprocessors: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int,
                     psn_encoder: torch.nn.Module, psn_criterion: torch.nn.Module,
@@ -158,27 +161,46 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     pbar_batch = tqdm(enumerate(data_loader), total=len(data_loader), leave=False)
     for i, (samples, targets) in pbar_batch:
-        samples = samples.to(device)
-        targets = [[{k: v.to(device) for k, v in t.items()} for t in vtgt] for vtgt in targets]
-        targets = [t for vtgt in targets for t in vtgt]
-        b, c, t, h, w = samples.size()
-        samples = samples.permute(0, 2, 1, 3, 4)
-        samples = samples.reshape(b * t, c, h, w)
+        with torch.inference_mode():
+            samples = samples.to(device)
+            targets = [[{k: v.to(device) for k, v in t.items()} for t in vtgt] for vtgt in targets]
+            targets = [t for vtgt in targets for t in vtgt]
+            b, c, t, h, w = samples.size()
+            samples = samples.permute(0, 2, 1, 3, 4)
+            samples = samples.reshape(b * t, c, h, w)
 
-        outputs = model(samples)
-        _, indices_ex = criterion(outputs, targets)
-        p_queries = [outputs["queries"][0, t][idx[0]] for t, idx in enumerate(indices_ex)]  # if idx[0] == None: 空のテンソルが格納
-        n_gt_bbox_list = [idx[0].size(0) for idx in indices_ex]  # [frame_id] = n gt bbox
-        p_queries = torch.cat(p_queries, 0)
-        p_feature_queries = psn_encoder(p_queries)
-        p_loss, same_person_label = psn_criterion(p_feature_queries, indices_ex, b, t)
-        matching_scores, same_person_lists_clip = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
+            outputs = model(samples)
+            _, indices_ex = criterion(outputs, targets)
 
+            # ハンガリアンマッチングで選ばれたindices_exの中でも正しく人物を捉えているidのみを保持するように変更
+            orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+            results = postprocessors['bbox'](outputs, orig_target_sizes)
+
+            score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
+            score_filter_labels = [result["labels"]
+                                   [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
+            psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
+            psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
+            box_filter_indices = box_filter(psn_boxes, targets, orig_target_sizes, psn_indices)
+            indices = [a[0][torch.isin(a[0], b.cpu())] for a, b in zip(indices_ex, box_filter_indices)]
+            decoded_queries = [outputs["queries"][0, t][idx] for t, idx in enumerate(indices)]
+
+        labels = psn_criterion.label_rearrange(indices, b, t).to(device)
+        if labels.shape[0] == 0:
+            continue
+        psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
+        loss = psn_criterion(psn_embedding, labels)
+
+        n_gt_bbox_list = [idx.size(0) for idx in indices]  # [frame_id] = n gt bbox
+        matching_scores, _ = make_same_person_list(psn_embedding.detach(), labels, n_gt_bbox_list, b, t)
+
+        if not loss.requires_grad:
+            continue
         optimizer.zero_grad()
-        p_loss.backward()
+        loss.backward()
         optimizer.step()
 
-        log["psn_loss"].update(p_loss.item(), b)
+        log["psn_loss"].update(loss.item(), b)
         log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
         log["same_psn_score"].update(matching_scores["same_psn_score"], b)
         log["total_psn_score"].update(matching_scores["total_psn_score"], b)
@@ -207,26 +229,31 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         samples = samples.reshape(b * t, c, h, w)
 
         outputs = model(samples)
-        loss_dict, indices_ex = criterion(outputs, targets)
-        p_queries = [outputs["queries"][0, t][idx[0]] for t, idx in enumerate(indices_ex)]  # if idx[0] == None: 空のテンソルが格納
-        p_query_idx2org_query_idx = [(t, idx.item()) for t, idxes in enumerate(indices_ex) for idx in idxes[0]]  # [idx of p_queries] = (frame idx, idx of origin query)
-        n_gt_bbox_list = [idx[0].size(0) for idx in indices_ex]
-        p_queries = torch.cat(p_queries, 0)
-        p_feature_queries = psn_encoder(p_queries)
-        p_loss, same_person_label = psn_criterion(p_feature_queries, indices_ex, b, t)
-        matching_scores, same_person_lists_clip = make_same_person_list(p_feature_queries.detach(), same_person_label, n_gt_bbox_list, b, t)
+        _, indices_ex = criterion(outputs, targets)
 
-        same_person_p_queries = []  # [clip_idx][person_list_idx] = p_query (tensor size is (x, D) x is len(person_list))
-        same_person_idx_lists = []  # [clip_idx][person_list_idx] = {frame_idx: origin_query_idx} len in len(person_list)
-        for clip_idx, same_person_lists in enumerate(same_person_lists_clip):
-            same_person_p_queries.append([])
-            same_person_idx_lists.append([])
-            for person_list_idx, same_person_list in enumerate(same_person_lists):
-                idx_of_p_queries = torch.Tensor(same_person_list["idx_of_p_queries"]).to(torch.int64)
-                same_person_p_queries[clip_idx].append(p_queries[idx_of_p_queries])
-                same_person_idx_lists[clip_idx].append({p_query_idx2org_query_idx[p_query_idx][0]: p_query_idx2org_query_idx[p_query_idx][1] for p_query_idx in idx_of_p_queries})
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        results = postprocessors['bbox'](outputs, orig_target_sizes)
 
-        log["psn_loss"].update(p_loss.item(), b)
+        score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
+        score_filter_labels = [result["labels"]
+                               [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
+        psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
+        psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
+        box_filter_indices = box_filter(psn_boxes, targets, orig_target_sizes, psn_indices)
+        indices = [a[0][torch.isin(a[0], b.cpu())] for a, b in zip(indices_ex, box_filter_indices)]
+        decoded_queries = [outputs["queries"][0, t][idx] for t, idx in enumerate(indices)]
+        p_query_idx2org_query_idx = [(t, idx.item()) for t, idxes in enumerate(indices) for idx in idxes]  # [idx of p_queries] = (frame idx, idx of origin query)
+
+        labels = psn_criterion.label_rearrange(indices, b, t).to(device)
+        if labels.shape[0] == 0:
+            continue
+        psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
+        loss = psn_criterion(psn_embedding, labels)
+
+        n_gt_bbox_list = [idx.size(0) for idx in indices]  # [frame_id] = n gt bbox
+        matching_scores, same_person_lists_clip = make_same_person_list(psn_embedding, labels, n_gt_bbox_list, b, t)
+
+        log["psn_loss"].update(loss.item(), b)
         log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
         log["same_psn_score"].update(matching_scores["same_psn_score"], b)
         log["total_psn_score"].update(matching_scores["total_psn_score"], b)
@@ -235,13 +262,38 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
         continue
-        orig_target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-        results = postprocessors['bbox'](outputs, orig_target_sizes)
+        same_person_p_queries = []  # [clip_idx][person_list_idx] = p_query (tensor size is (x, D) x is len(person_list))
+        same_person_idx_lists = []  # [clip_idx][person_list_idx] = {frame_idx: origin_query_idx} len in len(person_list)
+        for clip_idx, same_person_lists in enumerate(same_person_lists_clip):
+            same_person_p_queries.append([])
+            same_person_idx_lists.append([])
+            for person_list_idx, same_person_list in enumerate(same_person_lists):
+                idx_of_p_queries = torch.Tensor(same_person_list["idx_of_p_queries"]).to(torch.int64)
+                same_person_p_queries[clip_idx].append(decoded_queries[idx_of_p_queries])
+                same_person_idx_lists[clip_idx].append({p_query_idx2org_query_idx[p_query_idx][0]: p_query_idx2org_query_idx[p_query_idx][1] for p_query_idx in idx_of_p_queries})
 
         # plot
         plot_label_clip_boxes(samples[0:t], targets[0:t])
         plot_pred_clip_boxes(samples[0:t], results[0:t])
         plot_pred_person_link(samples[0:t], results[0:t], same_person_idx_lists[0])
+
+
+def box_filter(psn_boxes, targets, org_sizes, indices_list, th=0.25):
+    device = indices_list[0].device
+    new_indices = []
+    for pred_boxes, gt_boxes, org_size, indices in zip(psn_boxes, targets, org_sizes, indices_list):
+        gt_boxes = gt_boxes["boxes"]
+        if gt_boxes.size(0) == 0:
+            new_indices.append(torch.Tensor().to(torch.int64).to(device))
+            continue
+        gt_boxes = box_cxcywh_to_xyxy(gt_boxes)
+        gt_boxes[:, 0::2] = gt_boxes[:, 0::2] * org_size[1]
+        gt_boxes[:, 1::2] = gt_boxes[:, 1::2] * org_size[0]
+        iou = generalized_box_iou(pred_boxes, gt_boxes.cpu())
+        max_v, max_idx = torch.max(iou, dim=1)
+        new_indices.append(indices[max_v > th])
+
+    return new_indices
 
 
 if __name__ == '__main__':

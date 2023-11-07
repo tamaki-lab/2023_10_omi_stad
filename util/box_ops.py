@@ -59,13 +59,14 @@ def generalized_box_iou(boxes1, boxes2):
     assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
     iou, union = box_iou(boxes1, boxes2)
 
-    lt = torch.min(boxes1[:, None, :2], boxes2[:, :2])
-    rb = torch.max(boxes1[:, None, 2:], boxes2[:, 2:])
+    return iou
+    # lt = torch.min(boxes1[:, None, :2], boxes2[:, :2])
+    # rb = torch.max(boxes1[:, None, 2:], boxes2[:, 2:])
 
-    wh = (rb - lt).clamp(min=0)  # [N,M,2]
-    area = wh[:, :, 0] * wh[:, :, 1]
+    # wh = (rb - lt).clamp(min=0)  # [N,M,2]
+    # area = wh[:, :, 0] * wh[:, :, 1]
 
-    return iou - (area - union) / area
+    # return iou - (area - union) / area
 
 
 def masks_to_boxes(masks):
@@ -95,12 +96,13 @@ def masks_to_boxes(masks):
     return torch.stack([x_min, y_min, x_max, y_max], 1)
 
 
-def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor]) -> int:
+def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor], label_centric: bool = False) -> int:
     """Calculate tIoU (iou3d)
 
     Args:
         tube1 (Dict[str, torch.Tensor]): The key is the frame index of the tube, the value is bbox ([x1,y1,x2,y2])
         tube2 (Dict[str, torch.Tensor]):
+        label_centric (bool): If True, calculate iou on labeled frames (tube2) only
 
     Returns:
         int: tIoU
@@ -108,8 +110,12 @@ def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor]) -> 
     tube_iou = 0
     tube1_frame_idx = list(tube1.keys())
     tube2_frame_idx = list(tube2.keys())
-    frame_idx = tube1_frame_idx + tube2_frame_idx
-    frame_idx = set(frame_idx)
+    if label_centric:
+        frame_idx = tube2_frame_idx
+    else:
+        frame_idx = tube1_frame_idx + tube2_frame_idx
+        frame_idx = set(frame_idx)
+
     for i in frame_idx:
         if i in tube1 and i in tube2:
             frame_iou, _ = box_iou(tube1[i].reshape(-1, 4), tube2[i].reshape(-1, 4))

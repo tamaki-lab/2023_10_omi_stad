@@ -71,10 +71,14 @@ class ActionTube:
         self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]
         # print(f"num_tubes(after filterling):{len(self.tubes)}")
 
-    def extract(self, tube, indices):
-        indices = torch.where(indices)[0]
-        frame_indices = [tube["idx_of_p_queries"][i][0] for i in indices]
-        boxes = [tube["bbox"][i] for i in indices]
+    def extract(self, tube, indices=None):
+        if indices is None:
+            frame_indices = [frame_idx for frame_idx, query_idx in tube["idx_of_p_queries"]]
+            boxes = [box for box in tube["bbox"]]
+        else:
+            indices = torch.where(indices)[0]
+            frame_indices = [tube["idx_of_p_queries"][i][0] for i in indices]
+            boxes = [tube["bbox"][i] for i in indices]
         return {frame_idx: bbox for frame_idx, bbox in zip(frame_indices, boxes)}
 
     def split(self):

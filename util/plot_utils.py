@@ -55,11 +55,64 @@ def plot_label_clip_boxes(clip_sample, labels):
     plt.close()
 
 
+def plot_detr_pred_clip_boxes(clip_sample, results, th=0.85):
+    score_filter_indices = [(result["scores"] > th).nonzero().flatten() for result in results]
+    filter_labels = [result["labels"][(result["scores"] > th).nonzero().flatten()] for result in results]
+    filter_boxes = [result["boxes"][indices] for result, indices in zip(results, score_filter_indices)]
+    frame_list = []
+    for t in range(len(results)):
+        img = clip_sample[t].permute(1, 2, 0).cpu()
+        mean = torch.tensor([0.485, 0.456, 0.406])
+        std = torch.tensor([0.229, 0.224, 0.225])
+        img = img * std + mean
+        img = img.numpy()
+
+        img = np.clip(img * 255, a_min=0, a_max=255).astype(np.uint8).copy()
+        for i, (box, label) in enumerate(zip(filter_boxes[t], filter_labels[t])):
+            if label != 1:
+                continue
+            x1, y1, x2, y2 = box.unbind()
+            cv2.rectangle(
+                img,
+                pt1=(int(x1.item()), int(y1.item())),
+                pt2=(int(x2.item()), int(y2.item())),
+                color=(0, 255, 0),
+                thickness=2,
+                lineType=cv2.LINE_4,
+                shift=0,
+            )
+            cv2.putText(img,
+                        text=str(score_filter_indices[t][i].item()),
+                        org=(int(x1.item()), int(y1.item())),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=0.5,
+                        color=(255, 0, 0),
+                        thickness=1,
+                        lineType=cv2.LINE_4)
+        frame_list.append(img)
+
+    rows = 1
+    cols = 8
+    frame_id = 0
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4), squeeze=False, tight_layout=True)
+    for i in range(rows):
+        for j in range(cols):
+            img = frame_list[frame_id]
+            subplot_title = "frame:" + str(frame_id)
+            axes[i, j].set_title(subplot_title)
+            axes[i, j].imshow(img)
+            frame_id = frame_id + 1
+
+    plt.imshow(img)
+    os.makedirs("test_img", exist_ok=True)
+    plt.savefig("test_img/test_1.png")
+    plt.close()
+
+
 def plot_pred_clip_boxes(clip_sample, results, th=0.85):
     score_filter_indices = [(result["scores"] > th).nonzero().flatten() for result in results]
     filter_labels = [result["labels"][(result["scores"] > th).nonzero().flatten()] for result in results]
     filter_boxes = [result["boxes"][indices] for result, indices in zip(results, score_filter_indices)]
-    # filter_boxes_label = [(result["boxes"][indices], result["labels"][indices]) for result, indices in zip(results, score_filter_indices)]
     frame_list = []
     for t in range(len(results)):
         img = clip_sample[t].permute(1, 2, 0).cpu()

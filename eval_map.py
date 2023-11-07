@@ -15,7 +15,7 @@ from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
 from util.plot_utils import make_video_with_actiontube
 from models import build_model
-from models.person_encoder import PersonEncoder, SetInfoNce
+from models.person_encoder import PersonEncoder, NPairLoss
 from models.action_head import ActionHead
 from models.tube import ActionTube
 from util.gt_tubes import make_gt_tubes
@@ -45,7 +45,7 @@ def main(args):
     psn_encoder.eval()
     pretrain_path_encoder = osp.join(args.check_dir, args.load_ex_name, "encoder", f"epoch_{args.load_epoch_encoder}.pth")
     psn_encoder.load_state_dict(torch.load(pretrain_path_encoder))
-    psn_criterion = SetInfoNce().to(device)
+    psn_criterion = NPairLoss().to(device)
     psn_criterion.eval()
 
     action_head = ActionHead(n_classes=args.n_classes).to(device)
@@ -65,7 +65,7 @@ def main(args):
         video_name = "/".join(img_paths[0].parts[-3: -1])
         video_names.append(video_name)
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTube(video_name)
+        tube = ActionTube(video_name, args.sim_th)
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         pbar_video.set_description("[Frames Iteration]")
