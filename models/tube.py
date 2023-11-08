@@ -65,7 +65,7 @@ class ActionTube:
         for i in not_used_i_list:
             yield i, -1
 
-    def filter(self, filter_length=8):
+    def filter(self, filter_length=16):
         """ exclude short tube """
         # print(f"num_tubes(before filterling):{len(self.tubes)}")
         self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]

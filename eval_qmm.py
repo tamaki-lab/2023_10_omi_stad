@@ -24,26 +24,26 @@ from models.tube import ActionTube
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
-    # loader
-    parser.add_argument('--n_frames', default=8, type=int)
-
-    # setting
+    # setting #
     parser.add_argument('--dataset', default='ucf101-24', type=str)
-    parser.add_argument('--device', default=1, type=int)
-    parser.add_argument('--ex_name', default='noskip_th0.7', type=str)
-    parser.add_argument('--load_epoch', default=100, type=int)
-    parser.add_argument('--psn_score_th', default=0.7, type=float)
-    parser.add_argument('--sim_th', default=0.7, type=float)
-    parser.add_argument('--iou_th', default=0.4, type=float)
-    parser.add_argument('--tiou_th', default=0.2, type=float)
+    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--ex_name', default='lr:e4_pth:0.5_iouth:0.4', type=str)
+    # loader
+    parser.add_argument('--n_frames', default=128, type=int)
     parser.add_argument('--n_classes', default=24, type=int)
+    # person encoder
+    parser.add_argument('--load_epoch', default=10, type=int)
+    parser.add_argument('--psn_score_th', default=0.5, type=float)
+    parser.add_argument('--sim_th', default=0.7, type=float)
+    parser.add_argument('--iou_th', default=0.5, type=float)
+    parser.add_argument('--tiou_th', default=0.4, type=float)
 
+    # Fixed settings #
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', default=True,
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
-
     # others
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--check_dir', default="checkpoint", type=str)
@@ -118,13 +118,12 @@ def main(args):
 
         tube.filter()
 
-        utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
-
         # make new video with tube
         pred_tubes.append(tube)
         total_tubes += len(tube.tubes)
         continue
         video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
+        utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
 
@@ -137,27 +136,42 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names, tiou_th):
 
     for video_name, tubes_ano in gt_tubes.copy().items():
         gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
-    gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}
+    gt_tubes = {name: tubes for name, tubes in gt_tubes.items() if name in video_names}
+
+    correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items() if name in video_names}
 
     n_gt = sum([len(tubes) for _, tubes in gt_tubes.items()])
     tp = 0
+    n_pred = 0
 
     for _, (video_name, pred_tube) in enumerate(pred_tubes):
         video_gt_tubes = gt_tubes[video_name]
         tiou_list = []
         for _, gt_tube in enumerate(video_gt_tubes):
             tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True))
-            if len(tiou_list) == 0:
+        max_tiou = max(tiou_list)   # TODO gt bboxが1つも存在しない場合の考慮
+        max_index = tiou_list.index(max_tiou)
+        if max_tiou > tiou_th:
+            if correct_map[video_name][max_index]:
                 continue
-            elif max(tiou_list) > tiou_th:
-                tp += 1  # TODO 既に正解したものに対して2回目以降に正解した場合の考慮
             else:
-                continue
+                correct_map[video_name][max_index] = True
+                tp += 1
+                n_pred += 1
+        else:
+            n_pred += 1
 
-    print(f"n_gt_tubes: {n_gt}")
-    print(f"n_pred_tubes: {len(pred_tubes)}")
+    print("Settings")
+    print(f"psn_socore_th: {args.psn_score_th}")
+    print(f"sim_th: {args.sim_th}")
+    print(f"iou_th: {args.iou_th}")
+    print(f"tiou_th: {args.tiou_th}")
     print("-------")
-    print(f"Precision: {tp/len(pred_tubes)}")
+    print(f"n_gt_tubes: {n_gt}")
+    print(f"n_pred_tubes: {len(pred_tubes)}, n_pred_tubes (filter): {n_pred}")
+    print(f"True Positive: {tp}")
+    print("-------")
+    print(f"Precision: {tp/len(pred_tubes)}, Precision (filter): {tp/n_pred}")
     print(f"Recall: {tp/n_gt}")
 
 

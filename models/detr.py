@@ -14,8 +14,7 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 from .position_encoding import PositionEmbeddingSine
 from .backbone import Backbone, Joiner
 from .matcher import HungarianMatcher
-from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
-                           dice_loss, sigmoid_focal_loss)
+from .segmentation import (dice_loss, sigmoid_focal_loss)
 from .transformer import Transformer
 
 
@@ -277,7 +276,7 @@ class PostProcess(nn.Module):
         assert target_sizes.shape[1] == 2
 
         prob = F.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
+        scores, labels = prob[..., :-1].max(-1)  # Exclude "no object"
 
         # convert to [x0, y0, x1, y1] format
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)

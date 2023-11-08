@@ -7,40 +7,38 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
-
 from util.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
 from datasets.use_shards import get_loader
 import util.misc as utils
 from models import build_model
 from models.person_encoder import PersonEncoder, NPairLoss, make_same_person_list
-from util.plot_utils import plot_label_clip_boxes, plot_pred_clip_boxes, plot_pred_person_link
+from util.plot_utils import plot_pred_clip_boxes
 
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
+    # setting #
+    parser.add_argument('--epochs', default=15, type=int)
+    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--ex_name', default='test_ex', type=str)
     # loader
     parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--n_frames', default=8, type=int)
-
-    # setting
-    parser.add_argument('--epochs', default=70, type=int)
-    parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--ex_name', default='test_ex', type=str)
-    parser.add_argument('--psn_score_th', default=0.5, type=float)
-
     # person encoder
     parser.add_argument('--lr_en', default=1e-4, type=float)
     parser.add_argument('--weight_decay_en', default=1e-4, type=float)
-    parser.add_argument('--lr_drop_en', default=50, type=int)
+    parser.add_argument('--lr_drop_en', default=10, type=int)
+    parser.add_argument('--psn_score_th', default=0.5, type=float)
+    parser.add_argument('--iou_th', default=0.4, type=float)
 
+    # Fixed settings #
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', default=True,
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
-
     # others
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--check_dir', default="checkpoint", type=str)
@@ -91,10 +89,12 @@ def main(args):
     )
     hyper_params = {
         "ex_name": args.ex_name,
-        "optimizer_en": str(type(optimizer_en)).split("class")[-1][2:-2],
-        "learning late": args.lr_en,
         "batch_size": args.batch_size,
         "n_frames": args.n_frames,
+        "learning late": args.lr_en,
+        "lr_drop_epoch": args.lr_drop_en,
+        "psn_score_th": args.psn_score_th,
+        "iou_th": args.iou_th
     }
     ex.log_parameters(hyper_params)
 
@@ -144,7 +144,7 @@ def main(args):
         [train_log[key].reset() for key in train_log.keys()]
         [val_log[key].reset() for key in val_log.keys()]
 
-        utils.save_checkpoint(psn_encoder, args.check_dir, args.ex_name, epoch)
+        utils.save_checkpoint(psn_encoder, args.check_dir, args.ex_name + "/encoder", epoch)
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
@@ -181,7 +181,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                                    [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
             psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
             psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
-            box_filter_indices = box_filter(psn_boxes, targets, orig_target_sizes, psn_indices)
+            box_filter_indices = box_filter(psn_boxes, targets, orig_target_sizes, psn_indices, args.iou_th)
             indices = [a[0][torch.isin(a[0], b.cpu())] for a, b in zip(indices_ex, box_filter_indices)]
             decoded_queries = [outputs["queries"][0, t][idx] for t, idx in enumerate(indices)]
 
@@ -235,14 +235,13 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         results = postprocessors['bbox'](outputs, orig_target_sizes)
 
         score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
-        score_filter_labels = [result["labels"]
-                               [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
+        score_filter_labels = [result["labels"][(result["scores"] > args.psn_score_th).nonzero().flatten()]
+                               for result in results]
         psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
         psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
-        box_filter_indices = box_filter(psn_boxes, targets, orig_target_sizes, psn_indices)
+        box_filter_indices = box_filter(psn_boxes, targets, orig_target_sizes, psn_indices, args.iou_th)
         indices = [a[0][torch.isin(a[0], b.cpu())] for a, b in zip(indices_ex, box_filter_indices)]
         decoded_queries = [outputs["queries"][0, t][idx] for t, idx in enumerate(indices)]
-        p_query_idx2org_query_idx = [(t, idx.item()) for t, idxes in enumerate(indices) for idx in idxes]  # [idx of p_queries] = (frame idx, idx of origin query)
 
         labels = psn_criterion.label_rearrange(indices, b, t).to(device)
         if labels.shape[0] == 0:
@@ -262,23 +261,13 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
         continue
-        same_person_p_queries = []  # [clip_idx][person_list_idx] = p_query (tensor size is (x, D) x is len(person_list))
-        same_person_idx_lists = []  # [clip_idx][person_list_idx] = {frame_idx: origin_query_idx} len in len(person_list)
-        for clip_idx, same_person_lists in enumerate(same_person_lists_clip):
-            same_person_p_queries.append([])
-            same_person_idx_lists.append([])
-            for person_list_idx, same_person_list in enumerate(same_person_lists):
-                idx_of_p_queries = torch.Tensor(same_person_list["idx_of_p_queries"]).to(torch.int64)
-                same_person_p_queries[clip_idx].append(decoded_queries[idx_of_p_queries])
-                same_person_idx_lists[clip_idx].append({p_query_idx2org_query_idx[p_query_idx][0]: p_query_idx2org_query_idx[p_query_idx][1] for p_query_idx in idx_of_p_queries})
-
-        # plot
-        plot_label_clip_boxes(samples[0:t], targets[0:t])
-        plot_pred_clip_boxes(samples[0:t], results[0:t])
-        plot_pred_person_link(samples[0:t], results[0:t], same_person_idx_lists[0])
+        # plot #
+        target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        results = postprocessors['bbox'](outputs, target_sizes)
+        plot_pred_clip_boxes(samples[0:t], results[0:t], targets[0:t], plot_label=True)
 
 
-def box_filter(psn_boxes, targets, org_sizes, indices_list, th=0.25):
+def box_filter(psn_boxes, targets, org_sizes, indices_list, th=0.4):
     device = indices_list[0].device
     new_indices = []
     for pred_boxes, gt_boxes, org_size, indices in zip(psn_boxes, targets, org_sizes, indices_list):
