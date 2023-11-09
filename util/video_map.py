@@ -6,7 +6,7 @@ import torch
 from util.box_ops import tube_iou
 
 
-def voc_ap(pr, use_07_metric=True, num_complement=11):
+def voc_ap(pr, use_07_metric=False, num_complement=11):
     """ ap = voc_ap(rec, prec, [use_07_metric])
     Compute VOC AP given precision and recall.
     If use_07_metric is true, uses the

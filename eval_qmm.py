@@ -10,11 +10,13 @@ import cv2
 import numpy as np
 import torch
 import yaml
+import tarfile
+import pickle
 
 from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
 from util.plot_utils import make_video_with_tube
-from util.gt_tubes import make_gt_tubes_ucf
+from util.gt_tubes import make_gt_tubes
 from util.box_ops import tube_iou
 from models import build_model
 from models.person_encoder import PersonEncoder, NPairLoss
@@ -25,18 +27,17 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # setting #
-    parser.add_argument('--dataset', default='ucf101-24', type=str)
+    parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='lr:e4_pth:0.5_iouth:0.4', type=str)
     # loader
     parser.add_argument('--n_frames', default=128, type=int)
-    parser.add_argument('--n_classes', default=24, type=int)
     # person encoder
-    parser.add_argument('--load_epoch', default=10, type=int)
+    parser.add_argument('--load_epoch', default=15, type=int)
     parser.add_argument('--psn_score_th', default=0.5, type=float)
     parser.add_argument('--sim_th', default=0.7, type=float)
-    parser.add_argument('--iou_th', default=0.5, type=float)
-    parser.add_argument('--tiou_th', default=0.4, type=float)
+    parser.add_argument('--tiou_th', default=0.2, type=float)
+    parser.add_argument('--iou_th', default=0.5, type=float)    # for visualization
 
     # Fixed settings #
     # Backbone
@@ -53,9 +54,7 @@ def get_args_parser():
 
 
 @torch.no_grad()
-def main(args):
-    params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
-    params["label_list"].append("no action")
+def main(args, params):
 
     device = torch.device(f"cuda:{args.device}")
 
@@ -74,16 +73,16 @@ def main(args):
 
     psn_encoder = PersonEncoder().to(device)
     psn_encoder.eval()
-    trained_psn_encoder_path = osp.join(args.check_dir, args.ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
+    dir_encoder = osp.join(args.check_dir, args.dataset, args.ex_name, "encoder")
+    trained_psn_encoder_path = osp.join(dir_encoder, f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
     psn_criterion = NPairLoss().to(device)
     psn_criterion.eval()
 
-    val_loader = get_video_loader("ucf101-24", "val")
+    val_loader = get_video_loader(args.dataset, "val")
 
     pred_tubes = []
     video_names = []
-    total_tubes = 0
 
     pbar_videos = tqdm(enumerate(val_loader), total=len(val_loader), leave=False)
     for video_idx, (img_paths, video_ano) in pbar_videos:
@@ -117,34 +116,41 @@ def main(args):
                 tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
 
         tube.filter()
+        pred_tubes.append(tube)
 
         # make new video with tube
-        pred_tubes.append(tube)
-        total_tubes += len(tube.tubes)
         continue
         video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
-        utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
+        utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
 
-    gt_tubes = make_gt_tubes_ucf("val", params)
+    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes")
+    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    write_tar(pred_tubes, dir, filename)
+
+    gt_tubes = make_gt_tubes(args.dataset, "val", params)
     calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
 
-def calc_precision_recall(pred_tubes, gt_tubes, video_names, tiou_th):
+def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
     pred_tubes = [(video_tubes.video_name, video_tubes.extract(tube)) for video_tubes in pred_tubes for tube in video_tubes.tubes]
 
     for video_name, tubes_ano in gt_tubes.copy().items():
         gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
-    gt_tubes = {name: tubes for name, tubes in gt_tubes.items() if name in video_names}
 
-    correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items() if name in video_names}
+    if video_names is None:
+        correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items()}
+    else:
+        gt_tubes = {name: tubes for name, tubes in gt_tubes.items() if name in video_names}
+        correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items() if name in video_names}
 
     n_gt = sum([len(tubes) for _, tubes in gt_tubes.items()])
     tp = 0
     n_pred = 0
 
-    for _, (video_name, pred_tube) in enumerate(pred_tubes):
+    pbar_preds = tqdm(enumerate(pred_tubes), total=len(pred_tubes), leave=False)
+    for _, (video_name, pred_tube) in pbar_preds:
         video_gt_tubes = gt_tubes[video_name]
         tiou_list = []
         for _, gt_tube in enumerate(video_gt_tubes):
@@ -164,7 +170,6 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names, tiou_th):
     print("Settings")
     print(f"psn_socore_th: {args.psn_score_th}")
     print(f"sim_th: {args.sim_th}")
-    print(f"iou_th: {args.iou_th}")
     print(f"tiou_th: {args.tiou_th}")
     print("-------")
     print(f"n_gt_tubes: {n_gt}")
@@ -175,7 +180,42 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names, tiou_th):
     print(f"Recall: {tp/n_gt}")
 
 
+def write_tar(object, dir, file_name="test"):
+    os.makedirs(dir, exist_ok=True)
+    file_path = osp.join(dir, file_name)
+
+    with open(file_path + '.pkl', 'wb') as f:
+        pickle.dump(object, f)
+
+    with tarfile.open(file_path + '.tar', 'w') as tar:
+        tar.add(file_path + '.pkl')
+
+
+def read_tar(dir, file_name="test"):
+    file_path = osp.join(dir, file_name)
+    with tarfile.open(file_path + '.tar', 'r') as tar:
+        tar.extract(file_path + '.pkl')
+
+    with open(file_path + '.pkl', 'rb') as f:
+        object = pickle.load(f)
+    return object
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Tube evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
-    main(args)
+    params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
+    params["label_list"].append("no action")
+
+    if args.dataset == "jhmdb21":
+        args.psn_score_th = params["psn_score_th"]
+        args.iou_th = params["iou_th"]
+
+    main(args, params)
+
+    # load qmm outputs and calc precision and recall #
+    # dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes")
+    # filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    # test = read_tar(dir, filename)
+    # gt_tubes = make_gt_tubes(args.dataset, "val", params)
+    # calc_precision_recall(test, gt_tubes, None, args.tiou_th)

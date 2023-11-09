@@ -57,10 +57,10 @@ def make_dataset(
     sampling_rate,
 ):
     dataset_name = shards_url[0].split("/")[-3]
-    if dataset_name in ["UCF101-24", "JHMDB"]:
+    if dataset_name in ["ucf101-24", "jhmdb21"]:
         decoder = trimmed_video_decorder
         # decoder = video_decorder
-    elif dataset_name == "AVA":
+    elif dataset_name == "ava":
         decoder = untrimmed_video_decorder
     else:
         raise NameError(f"invalide dataset name: {dataset_name}")

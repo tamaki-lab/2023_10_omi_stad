@@ -7,6 +7,8 @@ import pandas as pd
 from tqdm import tqdm
 import av
 import yaml
+import json
+import os
 
 
 def make_gt_tubes_ucf(subset: str, params: Dict) -> Dict[str, list[Dict]]:
@@ -35,6 +37,29 @@ def make_gt_tubes_ucf(subset: str, params: Dict) -> Dict[str, list[Dict]]:
 
     for video_name, tubes_in_video in gt_tubes.copy().items():
         gt_tubes[video_name] = [tube_ano for tube_key, tube_ano in tubes_in_video.items()]
+
+    return gt_tubes
+
+
+def make_gt_tubes_jhmdb(subset: str, params: Dict) -> Dict[str, list[Dict]]:
+    """raad annotation file and make tube annotation"""
+
+    video_list_txt = params[subset + "_videos_file_path"]
+    with open(video_list_txt) as f:
+        video_list = f.readlines()
+    video_list = [video.replace("\n", "") for video in video_list]
+
+    json_load = json.load(open(params["annotation_file_path"]))
+    class_list = sorted(os.listdir(params["dataset_path"]))[1:]
+    cls_to_idx = {cls: i for i, cls in enumerate(class_list)}
+
+    gt_tubes = {}
+    for video_name in video_list:
+        cls = video_name.split("/")[0]
+        cls_id = cls_to_idx[cls]
+        gt_tubes[video_name] = [{"class": cls_id, "boxes": {}}]
+        for i, box in enumerate(json_load["gttubes"][video_name][str(cls_id)][0]):
+            gt_tubes[video_name][0]["boxes"][i] = torch.Tensor(box[1:])
 
     return gt_tubes
 
@@ -132,34 +157,38 @@ def make_gt_tubes(dataset: str, subset: str, params: Dict) -> Dict[str, list[Dic
         subset (str): "train" or "val"
         params (Dict):
     Returns:
-        Dict[str, list[Dict]]: {video_name:[{"class_id":class_id, "boxes":[{"frame_idx":bbox},...]},...]}
+        Dict[str, list[Dict]]:
             - key is video_name, value is list(tubes annotation)
                 - list length is num of tubes in one video
                 - The elements of the list are dict(keys are "class_id" and "boxes")
                     - "class_id": class_id
                     - "boxes": {"frame_idx": [x1,y1,x2,y2]}
                         - dict length is len(tube) (=num of bbox)
+            {video_name:[{"class_id":class_id, "boxes":[{"frame_idx":bbox},...]},...]}
     """
 
     if dataset == "ucf101-24":
         return make_gt_tubes_ucf(subset, params)
+    elif dataset == "jhmdb21":
+        return make_gt_tubes_jhmdb(subset, params)
     elif dataset == "ava":
         return make_gt_tubes_ava(subset, params)
     else:
         raise NameError(f"Invalide dataset name: {dataset}")
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     ### print debug ###
 
-    dataset = "ucf101-24"
-    params = yaml.safe_load(open(f"../datasets/projects/{dataset}.yml"))
-    gt_tubes = make_gt_tubes(dataset, "val", params)
+    # dataset = "ucf101-24"
+    # dataset = "jhmdb21"
+    # params = yaml.safe_load(open(f"../datasets/projects/{dataset}.yml"))
+    # gt_tubes = make_gt_tubes(dataset, "val", params)
 
-    video_idx = 2
-    video_name = sorted(list(gt_tubes.keys()))[video_idx]
-    print(video_name)
-    print(f'num of tubes: {len(gt_tubes[video_name])}')
-    print(f'cls_id: {gt_tubes[video_name][0]["cls_id"]}')
-    print(f'boxes: {gt_tubes[video_name][0]["boxes"]}')
-    print(sum([len(tubes_in_video) for _, tubes_in_video in gt_tubes.items()]))
+    # video_idx = 2
+    # video_name = sorted(list(gt_tubes.keys()))[video_idx]
+    # print(video_name)
+    # print(f'num of tubes: {len(gt_tubes[video_name])}')
+    # print(f'cls_id: {gt_tubes[video_name][0]["class"]}')
+    # print(f'boxes: {gt_tubes[video_name][0]["boxes"]}')
+    # print(sum([len(tubes_in_video) for _, tubes_in_video in gt_tubes.items()]))

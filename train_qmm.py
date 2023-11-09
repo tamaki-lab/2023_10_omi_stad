@@ -6,6 +6,8 @@ from comet_ml import Experiment
 from tqdm import tqdm
 import numpy as np
 import torch
+import os.path as osp
+import yaml
 
 from util.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
 from datasets.use_shards import get_loader
@@ -23,7 +25,8 @@ def get_args_parser():
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='test_ex', type=str)
     # loader
-    parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards/UCF101-24', type=str)
+    parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards', type=str)
+    parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--n_frames', default=8, type=int)
     # person encoder
@@ -32,6 +35,7 @@ def get_args_parser():
     parser.add_argument('--lr_drop_en', default=10, type=int)
     parser.add_argument('--psn_score_th', default=0.5, type=float)
     parser.add_argument('--iou_th', default=0.4, type=float)
+    parser.add_argument('--is_skip', action="store_true")
 
     # Fixed settings #
     # Backbone
@@ -48,6 +52,11 @@ def get_args_parser():
 
 
 def main(args):
+    if args.dataset == "jhmdb21":
+        params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
+        args.iou_th = params["iou_th"]
+        args.psn_score_th = params["psn_score_th"]
+
     device = torch.device(f"cuda:{args.device}")
 
     # fix the seed for reproducibility
@@ -62,14 +71,15 @@ def main(args):
     detr.eval()
     criterion.eval()
 
-    psn_encoder = PersonEncoder().to(device)
+    psn_encoder = PersonEncoder(skip=args.is_skip).to(device)
     psn_criterion = NPairLoss().to(device)
 
     optimizer_en = torch.optim.AdamW(psn_encoder.parameters(), lr=args.lr_en, weight_decay=args.weight_decay_en)
     lr_scheduler_en = torch.optim.lr_scheduler.StepLR(optimizer_en, args.lr_drop_en)
 
-    data_loader_train = get_loader(shard_path=args.shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
-    data_loader_val = get_loader(shard_path=args.shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
+    shards_path = osp.join(args.shards_path, args.dataset)
+    data_loader_train = get_loader(shard_path=shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
+    data_loader_val = get_loader(shard_path=shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
 
     pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
     detr.load_state_dict(torch.load(pretrain_path)["model"])
@@ -88,6 +98,7 @@ def main(args):
         workspace="kazukiomi",
     )
     hyper_params = {
+        "dataset": args.dataset,
         "ex_name": args.ex_name,
         "batch_size": args.batch_size,
         "n_frames": args.n_frames,
@@ -144,7 +155,7 @@ def main(args):
         [train_log[key].reset() for key in train_log.keys()]
         [val_log[key].reset() for key in val_log.keys()]
 
-        utils.save_checkpoint(psn_encoder, args.check_dir, args.ex_name + "/encoder", epoch)
+        utils.save_checkpoint(psn_encoder, osp.join(args.check_dir, args.dataset), args.ex_name + "/encoder", epoch)
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
@@ -250,7 +261,7 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         loss = psn_criterion(psn_embedding, labels)
 
         n_gt_bbox_list = [idx.size(0) for idx in indices]  # [frame_id] = n gt bbox
-        matching_scores, same_person_lists_clip = make_same_person_list(psn_embedding, labels, n_gt_bbox_list, b, t)
+        matching_scores, _ = make_same_person_list(psn_embedding, labels, n_gt_bbox_list, b, t)
 
         log["psn_loss"].update(loss.item(), b)
         log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
@@ -260,8 +271,8 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
         pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
 
-        continue
         # plot #
+        continue
         target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, target_sizes)
         plot_pred_clip_boxes(samples[0:t], results[0:t], targets[0:t], plot_label=True)
