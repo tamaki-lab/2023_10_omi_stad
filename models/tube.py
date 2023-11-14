@@ -4,12 +4,13 @@ import numpy as np
 
 
 class ActionTube:
-    def __init__(self, video_name=None, sim_th=0.7, end_consecutive_frames=8):
+    def __init__(self, video_name=None, sim_th=0.7, end_consecutive_frames=8, ano=None):
         self.video_name = video_name
         self.tubes = []
         self.end_idx = set()
         self.sim_th = sim_th
         self.k = end_consecutive_frames
+        self.ano = ano
 
     def update(self, d_queries, p_queries, frame_idx, psn_indices, psn_boxes):
         diff_list = [frame_idx - tube["idx_of_p_queries"][-1][0] for tube in self.tubes]
@@ -67,9 +68,10 @@ class ActionTube:
 
     def filter(self, filter_length=16):
         """ exclude short tube """
-        # print(f"num_tubes(before filterling):{len(self.tubes)}")
         self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]
-        # print(f"num_tubes(after filterling):{len(self.tubes)}")
+        for tube in self.tubes:
+            tube["p_query"] = [x.cpu() for x in tube["p_query"]]
+            tube["d_query"] = [x.cpu() for x in tube["d_query"]]
 
     def extract(self, tube, indices=None):
         if indices is None:

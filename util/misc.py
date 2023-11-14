@@ -13,11 +13,14 @@ import datetime
 import pickle
 from packaging import version
 from typing import Optional, List
+from tqdm import tqdm
 
 import torch
 import torch.distributed as dist
 from torch import Tensor
 import copy
+import tarfile
+import pickle
 
 import util.misc as utils
 from util.box_ops import generalized_box_iou
@@ -27,6 +30,36 @@ import torchvision
 if version.parse(torchvision.__version__) < version.parse('0.7'):
     from torchvision.ops import _new_empty_tensor
     from torchvision.ops.misc import _output_size
+
+
+def write_tar(object: list, dir: str, file_name: str = "test"):
+    os.makedirs(dir, exist_ok=True)
+    file_path = osp.join(dir, file_name)
+
+    with tarfile.open(file_path + '.tar', 'w') as tar:
+        for i, element in enumerate(object):
+            with open(f'element{i}.pkl', 'wb') as f:
+                pickle.dump(element, f)
+            tar.add(f'element{i}.pkl')
+
+    for i in range(len(object)):
+        os.remove(f'element{i}.pkl')
+
+
+def read_tar(dir: str, file_name: str):
+    file_path = osp.join(dir, file_name)
+
+    object = []
+    with tarfile.open(file_path + '.tar', 'r') as tar:
+        pbar = tqdm(tar.getmembers())
+        pbar.set_description("[Read tar file]")
+        for member in pbar:
+            f = tar.extractfile(member)
+            if f is not None:
+                element = pickle.load(f)
+                object.append(element)
+
+    return object
 
 
 def get_pretrain_path(model_name, dilation):

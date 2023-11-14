@@ -96,7 +96,7 @@ def masks_to_boxes(masks):
     return torch.stack([x_min, y_min, x_max, y_max], 1)
 
 
-def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor], label_centric: bool = False) -> int:
+def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor], label_centric: bool = False, frame_iou_set: Tuple = (False, 0.5)) -> int:
     """Calculate tIoU (iou3d)
 
     Args:
@@ -119,6 +119,8 @@ def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor], lab
     for i in frame_idx:
         if i in tube1 and i in tube2:
             frame_iou, _ = box_iou(tube1[i].reshape(-1, 4), tube2[i].reshape(-1, 4))
+            if frame_iou_set[0] and frame_iou > frame_iou_set[1]:
+                frame_iou = 1
         else:
             frame_iou = 0
         tube_iou += frame_iou

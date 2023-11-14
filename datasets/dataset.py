@@ -23,6 +23,7 @@ class VideoDataset(torch.utils.data.Dataset):
             video_name_list = f.readlines()
 
         self.dataset_path = params["dataset_path"]
+        # self.video_name_list = [video.replace("\n", "") for video in video_name_list][300:310]
         self.video_name_list = [video.replace("\n", "") for video in video_name_list]
         self.ano = read_ano(dataset_name, subset, params)
 
@@ -98,7 +99,7 @@ def read_jhmdb_ano(subset, params):
         ano_dict[video_name] = {}
         for i, box in enumerate(json_load["gttubes"][video_name][str(cls_id)][0]):
             ano_dict[video_name][i] = {}
-            ano_dict[video_name][i][0] = box[1:]
+            ano_dict[video_name][i][0] = [int(x) for x in box[1:]]
             ano_dict[video_name][i][0].append(cls_id)
 
     return ano_dict
