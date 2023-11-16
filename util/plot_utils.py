@@ -12,7 +12,7 @@ from pathlib import Path
 from .box_ops import box_unnormalize, box_cxcywh_to_xyxy
 
 
-def plot_pred_clip_boxes(clip_sample, results, labels, plot_label=False, th=0.25):
+def plot_pred_clip_boxes(clip_sample, results, labels, plot_label=False, th=0.75):
     mean = torch.tensor([0.485, 0.456, 0.406])
     std = torch.tensor([0.229, 0.224, 0.225])
 
@@ -46,6 +46,104 @@ def plot_pred_clip_boxes(clip_sample, results, labels, plot_label=False, th=0.25
                         fontFace=cv2.FONT_HERSHEY_SIMPLEX,
                         fontScale=0.5,
                         color=(255, 0, 0),
+                        thickness=1,
+                        lineType=cv2.LINE_4)
+
+        if plot_label:
+            labels[t]["boxes"] = box_unnormalize(labels[t]["boxes"].cpu(), labels[t]["size"])
+            labels[t]["boxes"] = box_cxcywh_to_xyxy(labels[t]["boxes"])
+            for i, box in enumerate(labels[t]["boxes"]):
+                x1, y1, x2, y2 = box.unbind()
+                cv2.rectangle(
+                    img,
+                    pt1=(int(x1.item()), int(y1.item())),
+                    pt2=(int(x2.item()), int(y2.item())),
+                    color=(0, 0, 0),
+                    thickness=2,
+                    lineType=cv2.LINE_4,
+                    shift=0,
+                )
+
+        frame_list.append(img)
+
+    rows = 1
+    cols = 8
+    frame_id = 0
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4), squeeze=False, tight_layout=True)
+    for i in range(rows):
+        for j in range(cols):
+            img = frame_list[frame_id]
+            subplot_title = "frame:" + str(frame_id)
+            axes[i, j].set_title(subplot_title)
+            axes[i, j].imshow(img)
+            frame_id = frame_id + 1
+
+    plt.imshow(img)
+    os.makedirs("test_img", exist_ok=True)
+    plt.savefig("test_img/test.png")
+    plt.close()
+
+
+def plot_diff_results(clip_sample, results1, results2, labels, plot_label=False, th=0.75):
+    mean = torch.tensor([0.485, 0.456, 0.406])
+    std = torch.tensor([0.229, 0.224, 0.225])
+
+    filter_labels1 = [result["labels"][(result["scores"] > th).nonzero().flatten()] for result in results1]
+    filter_boxes1 = [result["boxes"][(result["scores"] > th).nonzero().flatten()] for result in results1]
+    filter_scores1 = [result["scores"][(result["scores"] > th).nonzero().flatten()] for result in results1]
+
+    filter_labels2 = [result["labels"][(result["scores"] > th).nonzero().flatten()] for result in results2]
+    filter_boxes2 = [result["boxes"][(result["scores"] > th).nonzero().flatten()] for result in results2]
+    filter_scores2 = [result["scores"][(result["scores"] > th).nonzero().flatten()] for result in results2]
+
+    frame_list = []
+    for t in range(len(results1)):
+        img = clip_sample[t].permute(1, 2, 0).cpu()
+        img = img * std + mean
+        img = img.numpy()
+
+        img = np.clip(img * 255, a_min=0, a_max=255).astype(np.uint8).copy()
+        for i, (box, label, score) in enumerate(zip(filter_boxes1[t], filter_labels1[t], filter_scores1[t])):
+            if label != 1:
+                continue
+            x1, y1, x2, y2 = box.unbind()
+            cv2.rectangle(
+                img,
+                pt1=(int(x1.item()), int(y1.item())),
+                pt2=(int(x2.item()), int(y2.item())),
+                color=(255, 0, 0),
+                thickness=2,
+                lineType=cv2.LINE_4,
+                shift=0,
+            )
+            cv2.putText(img,
+                        text=f"{round(score.item(),2)}",
+                        org=(int(x1.item()), int(y1.item())),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=0.5,
+                        color=(255, 0, 0),
+                        thickness=1,
+                        lineType=cv2.LINE_4)
+
+        for i, (box, label, score) in enumerate(zip(filter_boxes2[t], filter_labels2[t], filter_scores2[t])):
+            if label != 1:
+                continue
+            x1, y1, x2, y2 = box.unbind()
+            cv2.rectangle(
+                img,
+                pt1=(int(x1.item()), int(y1.item())),
+                pt2=(int(x2.item()), int(y2.item())),
+                color=(0, 255, 0),
+                thickness=2,
+                lineType=cv2.LINE_4,
+                shift=0,
+            )
+            cv2.putText(img,
+                        text=f"{round(score.item(),2)}",
+                        org=(int(x1.item()), int(y1.item())),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=0.5,
+                        color=(0, 255, 0),
                         thickness=1,
                         lineType=cv2.LINE_4)
 

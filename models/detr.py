@@ -333,17 +333,16 @@ def build(args):
         aux_loss=False,
     )
 
+    # matcher = HungarianMatcher(cost_class=1, cost_bbox=1, cost_giou=9)
+    # weight_dict = {'loss_ce': 1, 'loss_bbox': 1, 'loss_giou': 9}
     matcher = HungarianMatcher(cost_class=1, cost_bbox=5, cost_giou=2)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': 5}
-    # weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_giou'] = 2
+    weight_dict = {'loss_ce': 1, 'loss_bbox': 5, 'loss_giou': 2}
 
     losses = ['labels', 'boxes', 'cardinality']
 
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=0.1, losses=losses)
-    # criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-    #                          eos_coef=args.eos_coef, losses=losses)
+
     postprocessors = {'bbox': PostProcess()}
 
     return model, criterion, postprocessors

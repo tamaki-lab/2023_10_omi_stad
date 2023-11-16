@@ -63,8 +63,15 @@ def main(args, params):
     detr, criterion, postprocessors = build_model(args)
     detr.to(device)
     detr.eval()
-    pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
-    detr.load_state_dict(torch.load(pretrain_path)["model"])
+    if args.dataset == "ucf101-24":
+        pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
+        # pretrain_path = "checkpoint/ucf101-24/test/detr/epoch_50.pth"
+        detr.load_state_dict(torch.load(pretrain_path))
+    else:
+        pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
+        detr.load_state_dict(torch.load(pretrain_path)["model"])
+    # pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
+    # detr.load_state_dict(torch.load(pretrain_path)["model"])
     criterion.to(device)
     criterion.eval()
 
@@ -153,7 +160,7 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
         video_gt_tubes = gt_tubes[video_name]
         tiou_list = []
         for _, gt_tube in enumerate(video_gt_tubes):
-            tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(True, 0.5)))
+            tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(False, 0.5)))
         max_tiou = max(tiou_list)   # TODO gt bboxが1つも存在しない場合の考慮
         max_index = tiou_list.index(max_tiou)
         if max_tiou > tiou_th:
@@ -165,6 +172,8 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
                 n_pred += 1
         else:
             n_pred += 1
+
+        pbar_preds.set_postfix_str(f'TP={tp}, Pre: {tp/len(pred_tubes)}, Rec: {tp/n_gt}')
 
     print("Settings")
     print(f"psn_socore_th: {args.psn_score_th}")

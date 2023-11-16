@@ -14,16 +14,16 @@ from datasets.use_shards import get_loader
 import util.misc as utils
 from models import build_model
 from models.person_encoder import PersonEncoder, NPairLoss, make_same_person_list
-from util.plot_utils import plot_pred_clip_boxes
+from util.plot_utils import plot_pred_clip_boxes, plot_diff_results
 
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # setting #
-    parser.add_argument('--epochs', default=15, type=int)
+    parser.add_argument('--epochs', default=30, type=int)
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--ex_name', default='test_ex', type=str)
+    parser.add_argument('--ex_name', default='test', type=str)
     # loader
     parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards', type=str)
     parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
@@ -33,8 +33,8 @@ def get_args_parser():
     parser.add_argument('--lr_en', default=1e-4, type=float)
     parser.add_argument('--weight_decay_en', default=1e-4, type=float)
     parser.add_argument('--lr_drop_en', default=10, type=int)
-    parser.add_argument('--psn_score_th', default=0.5, type=float)
-    parser.add_argument('--iou_th', default=0.4, type=float)
+    parser.add_argument('--psn_score_th', default=0.75, type=float)
+    parser.add_argument('--iou_th', default=0.5, type=float)
     parser.add_argument('--is_skip', action="store_true")
 
     # Fixed settings #
@@ -81,8 +81,12 @@ def main(args):
     data_loader_train = get_loader(shard_path=shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
     data_loader_val = get_loader(shard_path=shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
 
-    pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
-    detr.load_state_dict(torch.load(pretrain_path)["model"])
+    if args.dataset == "ucf101-24":
+        pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
+        detr.load_state_dict(torch.load(pretrain_path))
+    else:
+        pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
+        detr.load_state_dict(torch.load(pretrain_path)["model"])
 
     train_log = {"psn_loss": utils.AverageMeter(),
                  "diff_psn_score": utils.AverageMeter(),
@@ -110,23 +114,11 @@ def main(args):
     ex.log_parameters(hyper_params)
 
     ## log loss before training ##
-    evaluate(
-        detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log
-    )
-    ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=0)
-    ex.log_metric("epoch_train_diff_psn_score", train_log["diff_psn_score"].avg, step=0)
-    ex.log_metric("epoch_train_same_psn_score", train_log["same_psn_score"].avg, step=0)
-    ex.log_metric("epoch_train_total_psn_score", train_log["total_psn_score"].avg, step=0)
-    [train_log[key].reset() for key in train_log.keys()]
+    evaluate(detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log)
+    leave_ex(ex, "train", train_log, 0)
 
-    evaluate(
-        detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
-    )
-    ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=0)
-    ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=0)
-    ex.log_metric("epoch_val_same_psn_score", val_log["same_psn_score"].avg, step=0)
-    ex.log_metric("epoch_val_total_psn_score", val_log["total_psn_score"].avg, step=0)
-    [val_log[key].reset() for key in val_log.keys()]
+    evaluate(detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log)
+    leave_ex(ex, "val", val_log, 0)
 
     print("Start training")
 
@@ -137,23 +129,14 @@ def main(args):
             detr, criterion, postprocessors, data_loader_train, optimizer_en, device, epoch,
             psn_encoder, psn_criterion, train_log, ex)
 
-        ex.log_metric("epoch_train_psn_loss", train_log["psn_loss"].avg, step=epoch)
-        ex.log_metric("epoch_train_diff_psn_score", train_log["diff_psn_score"].avg, step=epoch)
-        ex.log_metric("epoch_train_same_psn_score", train_log["same_psn_score"].avg, step=epoch)
-        ex.log_metric("epoch_train_total_psn_score", train_log["total_psn_score"].avg, step=epoch)
+        leave_ex(ex, "train", train_log, epoch)
 
         lr_scheduler_en.step()
 
         evaluate(
             detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log
         )
-        ex.log_metric("epoch_val_psn_loss", val_log["psn_loss"].avg, step=epoch)
-        ex.log_metric("epoch_val_diff_psn_score", val_log["diff_psn_score"].avg, step=epoch)
-        ex.log_metric("epoch_val_same_psn_score", val_log["same_psn_score"].avg, step=epoch)
-        ex.log_metric("epoch_val_total_psn_score", val_log["total_psn_score"].avg, step=epoch)
-
-        [train_log[key].reset() for key in train_log.keys()]
-        [val_log[key].reset() for key in val_log.keys()]
+        leave_ex(ex, "val", val_log, epoch)
 
         utils.save_checkpoint(psn_encoder, osp.join(args.check_dir, args.dataset), args.ex_name + "/encoder", epoch)
 
@@ -211,13 +194,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         loss.backward()
         optimizer.step()
 
-        log["psn_loss"].update(loss.item(), b)
-        log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
-        log["same_psn_score"].update(matching_scores["same_psn_score"], b)
-        log["total_psn_score"].update(matching_scores["total_psn_score"], b)
+        update_log(log, loss, matching_scores, b)
 
-        pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
-        pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
+        pbar_batch.set_postfix_str(
+            f'loss={round(log["psn_loss"].avg, 3)}, match score={round(log["total_psn_score"].avg, 3)}')
 
         ex.log_metric("batch_psn_loss", log["psn_loss"].val, step=step + i)
         ex.log_metric("batch_diff_psn_score", log["diff_psn_score"].val, step=step + i)
@@ -263,13 +243,10 @@ def evaluate(model, criterion, postprocessors, data_loader, device, psn_encoder,
         n_gt_bbox_list = [idx.size(0) for idx in indices]  # [frame_id] = n gt bbox
         matching_scores, _ = make_same_person_list(psn_embedding, labels, n_gt_bbox_list, b, t)
 
-        log["psn_loss"].update(loss.item(), b)
-        log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
-        log["same_psn_score"].update(matching_scores["same_psn_score"], b)
-        log["total_psn_score"].update(matching_scores["total_psn_score"], b)
+        update_log(log, loss, matching_scores, b)
 
-        pbar_batch.set_postfix_str(f'loss={log["psn_loss"].val}')
-        pbar_batch.set_postfix_str(f'match score={log["total_psn_score"].val}')
+        pbar_batch.set_postfix_str(
+            f'loss={round(log["psn_loss"].avg, 3)}, match score={round(log["total_psn_score"].avg, 3)}')
 
         # plot #
         continue
@@ -296,7 +273,72 @@ def box_filter(psn_boxes, targets, org_sizes, indices_list, th=0.4):
     return new_indices
 
 
+def update_log(log, loss, matching_scores, b):
+    log["psn_loss"].update(loss.item(), b)
+    log["diff_psn_score"].update(matching_scores["diff_psn_score"], b)
+    log["same_psn_score"].update(matching_scores["same_psn_score"], b)
+    log["total_psn_score"].update(matching_scores["total_psn_score"], b)
+
+
+def leave_ex(ex, subset, log, epoch):
+    ex.log_metric("epoch_" + subset + "_psn_loss", log["psn_loss"].avg, step=epoch)
+    ex.log_metric("epoch_" + subset + "_diff_psn_score", log["diff_psn_score"].avg, step=epoch)
+    ex.log_metric("epoch_" + subset + "_same_psn_score", log["same_psn_score"].avg, step=epoch)
+    ex.log_metric("epoch_" + subset + "_total_psn_score", log["total_psn_score"].avg, step=epoch)
+
+    [log[key].reset() for key in log.keys()]
+
+
+@torch.no_grad()
+def diff_detr_head(args):
+    device = torch.device(f"cuda:{args.device}")
+
+    # fix the seed for reproducibility
+    seed = args.seed + utils.get_rank()
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    org_detr, criterion, postprocessors = build_model(args)
+    detr, _, _ = build_model(args)
+    criterion.to(device)
+    detr.to(device)
+    detr.eval()
+    org_detr.to(device)
+    org_detr.eval()
+    criterion.eval()
+
+    shards_path = osp.join(args.shards_path, args.dataset)
+    # data_loader = get_loader(shard_path=shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
+    data_loader = get_loader(shard_path=shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
+
+    org_pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
+    org_detr.load_state_dict(torch.load(org_pretrain_path)["model"])
+    # pretrain_path = "checkpoint/ucf101-24/test/detr/epoch_50.pth"
+    pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
+    detr.load_state_dict(torch.load(pretrain_path))
+
+    pbar_batch = tqdm(data_loader, total=len(data_loader), leave=False)
+    for samples, targets in pbar_batch:
+        samples = samples.to(device)
+        targets = [[{k: v.to(device) for k, v in t.items()} for t in vtgt] for vtgt in targets]
+        targets = [t for vtgt in targets for t in vtgt]
+        b, c, t, h, w = samples.size()
+        samples = samples.permute(0, 2, 1, 3, 4)
+        samples = samples.reshape(b * t, c, h, w)
+
+        org_outputs = org_detr(samples)
+        outputs = detr(samples)
+
+        target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        org_results = postprocessors['bbox'](org_outputs, target_sizes)
+        results = postprocessors['bbox'](outputs, target_sizes)
+        plot_diff_results(samples[0:t], org_results[0:t], results[0:t], targets[0:t], plot_label=True)
+        continue
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
     main(args)
+    # diff_detr_head(args)
