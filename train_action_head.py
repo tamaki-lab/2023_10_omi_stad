@@ -230,7 +230,7 @@ def main(args, params):
 
                 tube.filter()
 
-                utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
+                utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
 
                 if len(tube.tubes) == 0:
                     continue

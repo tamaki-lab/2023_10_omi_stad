@@ -40,4 +40,4 @@ label_list:
 
 # Settings #
 psn_score_th: 0.95
-iou_th: 0.6
+iou_th: 0.35

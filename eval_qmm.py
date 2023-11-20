@@ -28,6 +28,7 @@ def get_args_parser():
     parser.add_argument('--ex_name', default='jhmdb_wd:e4', type=str)
     # loader
     parser.add_argument('--n_frames', default=128, type=int)
+    parser.add_argument('--subset', default="val", type=str, choices=["train", "val"])
     # person encoder
     parser.add_argument('--load_epoch', default=15, type=int)
     parser.add_argument('--psn_score_th', default=0.9, type=float)
@@ -65,13 +66,10 @@ def main(args, params):
     detr.eval()
     if args.dataset == "ucf101-24":
         pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
-        # pretrain_path = "checkpoint/ucf101-24/test/detr/epoch_50.pth"
         detr.load_state_dict(torch.load(pretrain_path))
     else:
         pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
         detr.load_state_dict(torch.load(pretrain_path)["model"])
-    # pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
-    # detr.load_state_dict(torch.load(pretrain_path)["model"])
     criterion.to(device)
     criterion.eval()
 
@@ -83,12 +81,12 @@ def main(args, params):
     psn_criterion = NPairLoss().to(device)
     psn_criterion.eval()
 
-    val_loader = get_video_loader(args.dataset, "val")
+    loader = get_video_loader(args.dataset, args.subset)
 
     pred_tubes = []
     video_names = []
 
-    pbar_videos = tqdm(enumerate(val_loader), total=len(val_loader), leave=False)
+    pbar_videos = tqdm(enumerate(loader), total=len(loader), leave=False)
     for video_idx, (img_paths, video_ano) in pbar_videos:
         video_name = "/".join(img_paths[0].parts[-3: -1])
         video_names.append(video_name)
@@ -129,11 +127,11 @@ def main(args, params):
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
 
-    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes")
+    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
     filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     utils.write_tar(pred_tubes, dir, filename)
 
-    gt_tubes = make_gt_tubes(args.dataset, "val", params)
+    gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
     video_names = [tubes.video_name for tubes in pred_tubes]
     calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
@@ -184,8 +182,8 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
     print(f"n_pred_tubes: {len(pred_tubes)}, n_pred_tubes (filter): {n_pred}")
     print(f"True Positive: {tp}")
     print("-------")
-    print(f"Precision: {tp/len(pred_tubes)}, Precision (filter): {tp/n_pred}")
-    print(f"Recall: {tp/n_gt}")
+    print(f"Precision: {round(tp/len(pred_tubes),3)}, Precision (filter): {round(tp/n_pred,3)}")
+    print(f"Recall: {round(tp/n_gt,3)}")
 
 
 if __name__ == '__main__':
@@ -198,15 +196,15 @@ if __name__ == '__main__':
         args.psn_score_th = params["psn_score_th"]
         args.iou_th = params["iou_th"]
 
-    main(args, params)
+    # main(args, params)
 
     # load qmm outputs and calc precision and recall #
-    # dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes")
-    # filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
-    # pred_tubes = utils.read_tar(dir, filename)
-    # gt_tubes = make_gt_tubes(args.dataset, "val", params)
-    # video_names = [tubes.video_name for tubes in pred_tubes]
-    # calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
+    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
+    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    pred_tubes = [obj for obj in utils.TarIterator(dir, filename)]
+    gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
+    video_names = [tubes.video_name for tubes in pred_tubes]
+    calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
     # visualization #
     # for tube in pred_tubes:

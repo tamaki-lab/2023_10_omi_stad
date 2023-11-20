@@ -23,7 +23,7 @@ class VideoDataset(torch.utils.data.Dataset):
             video_name_list = f.readlines()
 
         self.dataset_path = params["dataset_path"]
-        # self.video_name_list = [video.replace("\n", "") for video in video_name_list][300:310]
+        # self.video_name_list = [video.replace("\n", "") for video in video_name_list][25:40]
         self.video_name_list = [video.replace("\n", "") for video in video_name_list]
         self.ano = read_ano(dataset_name, subset, params)
 

@@ -21,6 +21,7 @@ from torch import Tensor
 import copy
 import tarfile
 import pickle
+import random
 
 import util.misc as utils
 from util.box_ops import generalized_box_iou
@@ -37,29 +38,41 @@ def write_tar(object: list, dir: str, file_name: str = "test"):
     file_path = osp.join(dir, file_name)
 
     with tarfile.open(file_path + '.tar', 'w') as tar:
-        for i, element in enumerate(object):
+        pbar = tqdm(enumerate(object))
+        pbar.set_description("[Write tar file]")
+        for i, element in pbar:
             with open(f'element{i}.pkl', 'wb') as f:
                 pickle.dump(element, f)
             tar.add(f'element{i}.pkl')
+            os.remove(f'element{i}.pkl')
 
-    for i in range(len(object)):
-        os.remove(f'element{i}.pkl')
+    # for i in range(len(object)):
+    #     os.remove(f'element{i}.pkl')
 
 
-def read_tar(dir: str, file_name: str):
-    file_path = osp.join(dir, file_name)
+class TarIterator:
+    def __init__(self, dir, file_name):
+        self.file_path = osp.join(dir, file_name) + ".tar"
+        self.tar = tarfile.open(self.file_path, "r")
+        self.members = self.tar.getmembers()
+        self.index = 0
 
-    object = []
-    with tarfile.open(file_path + '.tar', 'r') as tar:
-        pbar = tqdm(tar.getmembers())
-        pbar.set_description("[Read tar file]")
-        for member in pbar:
-            f = tar.extractfile(member)
-            if f is not None:
-                element = pickle.load(f)
-                object.append(element)
+    def __iter__(self):
+        self.index = 0
+        random.shuffle(self.members)
+        return self
 
-    return object
+    def __len__(self):
+        return len(self.members)
+
+    def __next__(self):
+        if self.index >= len(self.members):
+            raise StopIteration
+        member = self.members[self.index]
+        f = self.tar.extractfile(member)
+        element = pickle.load(f)
+        self.index += 1
+        return element
 
 
 def get_pretrain_path(model_name, dilation):
@@ -117,13 +130,11 @@ def give_label(video_ano, tubes, no_action_id=-1, iou_th=0.4):
                     tube["action_label"].append(gt_ano[max_idx][4])
                 else:
                     tube["action_label"].append(no_action_id)
-                continue
             else:
                 tube["action_label"].append(no_action_id)
 
 
 def give_pred(tube, outputs):
-    # tube["action_pred"] = outputs.cpu().detach()
     tube["action_pred"] = outputs.softmax(dim=1).cpu().detach()
     tube["action_score"] = tube["action_pred"].topk(1, 1)[0].reshape(-1)
     tube["action_id"] = tube["action_pred"].topk(1, 1)[1].reshape(-1)
