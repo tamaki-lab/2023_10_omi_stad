@@ -5,19 +5,16 @@ from comet_ml import Experiment
 from tqdm import tqdm
 import os
 import os.path as osp
-import av
-import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-import copy
+import yaml
 
 from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
 from util.plot_utils import make_video_with_tube
-from util.box_ops import generalized_box_iou
 from models import build_model
-from models.person_encoder import PersonEncoder, SetInfoNce
+from models.person_encoder import PersonEncoder
 from models.action_head import ActionHead
 from models.tube import ActionTube
 
@@ -25,19 +22,20 @@ from models.tube import ActionTube
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
-    # loader
-    parser.add_argument('--n_frames', default=8, type=int)
-
-    # setting
-    parser.add_argument('--load_ex_name', default='noskip_th0.7', type=str)
-    parser.add_argument('--write_ex_name', default='test', type=str)
+    # setting #
+    parser.add_argument('--n_epochs', default=20, type=int)
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--load_epoch', default=100, type=int)
+    parser.add_argument('--write_ex_name', default='head_test', type=str)
+    # loader
+    parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
+    parser.add_argument('--n_frames', default=128, type=int)
+
+    # person encoder
+    parser.add_argument('--load_ex_name', default='jhmdb_wd:e4', type=str)
+    parser.add_argument('--load_epoch', default=15, type=int)
     parser.add_argument('--psn_score_th', default=0.7, type=float)
     parser.add_argument('--sim_th', default=0.7, type=float)
-    parser.add_argument('--iou_th', default=0.4, type=float)
-    parser.add_argument('--n_classes', default=24, type=int)
-    parser.add_argument('--n_epochs', default=20, type=int)
+    parser.add_argument('--iou_th', default=0.3, type=float)
 
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
@@ -48,7 +46,7 @@ def get_args_parser():
     # action head
     parser.add_argument('--lr_head', default=1e-4, type=float)
     parser.add_argument('--weight_decay_head', default=1e-4, type=float)
-    parser.add_argument('--lr_drop_head', default=50, type=int)
+    parser.add_argument('--lr_drop_head', default=15, type=int)
     parser.add_argument('--iter_update', default=8, type=int)
 
     # others
@@ -60,7 +58,7 @@ def get_args_parser():
 
 
 # @torch.no_grad()
-def main(args):
+def main(args, params):
     device = torch.device(f"cuda:{args.device}")
 
     seed = args.seed + utils.get_rank()
@@ -78,10 +76,8 @@ def main(args):
 
     psn_encoder = PersonEncoder().to(device)
     psn_encoder.eval()
-    trained_psn_encoder_path = osp.join(args.check_dir, args.load_ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
+    trained_psn_encoder_path = osp.join(args.check_dir, args.dataset, args.load_ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
-    psn_criterion = SetInfoNce().to(device)
-    psn_criterion.eval()
 
     action_head = ActionHead(n_classes=args.n_classes).to(device)
     # head_criterion = nn.CrossEntropyLoss(weight=torch.tensor([1.0] * args.n_classes + [0.05])).to(device)
@@ -89,8 +85,8 @@ def main(args):
     optimizer_head = torch.optim.AdamW(action_head.parameters(), lr=args.lr_head, weight_decay=args.weight_decay_head)
     lr_scheduler_head = torch.optim.lr_scheduler.StepLR(optimizer_head, args.lr_drop_head)
 
-    train_loader = get_video_loader("ucf101-24", "train")
-    val_loader = get_video_loader("ucf101-24", "val", shuffle=False)
+    train_loader = get_video_loader(args.dataset, "train")
+    val_loader = get_video_loader(args.dataset, "val", shuffle=False)
 
     train_log = {"action_loss": utils.AverageMeter(),
                  "action_acc1": utils.AverageMeter(),
@@ -155,7 +151,7 @@ def main(args):
             tube.filter()
 
             ## give a label for each query in person list ##
-            utils.give_label(video_ano, tube.tubes, args.n_classes, args.iou_th)
+            utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
 
             # train head
             if len(tube.tubes) == 0:
@@ -193,15 +189,11 @@ def main(args):
 
             # make new video with tube
             continue
-            video_path = "/".join(img_paths[0].parts[-3:-1])
-            video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-            make_video_with_tube(video_path, tube.tubes, video_ano)
+            video_name = "/".join(img_paths[0].parts[-3:-1])
+            video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
+            make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano)
             os.remove("test.avi")
-        ex.log_metric("train_action_loss", train_log["action_loss"].avg, step=epoch)
-        ex.log_metric("train_action_acc1", train_log["action_acc1"].avg, step=epoch)
-        ex.log_metric("train_action_acc5", train_log["action_acc5"].avg, step=epoch)
-        ex.log_metric("train_action_acc1_wo_noaction", train_log["action_acc1_wo_noaction"].avg, step=epoch)
-        ex.log_metric("train_action_acc5_wo_noaction", train_log["action_acc5_wo_noaction"].avg, step=epoch)
+        leave_ex(ex, "train", train_log, epoch)
 
         # validation
         with torch.inference_mode():
@@ -265,26 +257,36 @@ def main(args):
                 val_log["action_acc5_wo_noaction"].update(acc_dict["acc5_wo"].item())
 
                 ## make new video with tube ##
-                # continue
-                video_path = "/".join(img_paths[0].parts[-3:-1])
-                video_path = "/mnt/NAS-TVS872XT/dataset/UCF101/video/" + video_path + ".avi"
-                make_video_with_tube(video_path, tube.tubes, video_ano)
-                exit()
+                continue
+                video_name = "/".join(img_paths[0].parts[-3:-1])
+                video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
+                make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano)
                 os.remove("test.avi")
 
-        ex.log_metric("val_action_loss", val_log["action_loss"].avg, step=epoch)
-        ex.log_metric("val_action_acc1", val_log["action_acc1"].avg, step=epoch)
-        ex.log_metric("val_action_acc5", val_log["action_acc5"].avg, step=epoch)
-        ex.log_metric("val_action_acc1_wo_noaction", val_log["action_acc1_wo_noaction"].avg, step=epoch)
-        ex.log_metric("val_action_acc5_wo_noaction", val_log["action_acc5_wo_noaction"].avg, step=epoch)
+        leave_ex(ex, "val", val_log, epoch)
 
-        [log.reset() for _, log in train_log.items()]
-        [log.reset() for _, log in val_log.items()]
-        dir = args.check_dir + "/" + args.load_ex_name + "/head"
-        utils.save_checkpoint(action_head, dir, args.write_ex_name, epoch)
+        utils.save_checkpoint(action_head, osp.join(args.check_dir, args.dataset), args.load_ex_name + "/head/" + args.write_ex_name, epoch)
+
+
+
+def leave_ex(ex, subset, log, epoch):
+    ex.log_metric(subset + "_action_loss", log["action_loss"].avg, step=epoch)
+    ex.log_metric(subset + "_action_acc1", log["action_acc1"].avg, step=epoch)
+    ex.log_metric(subset + "_action_acc5", log["action_acc5"].avg, step=epoch)
+    ex.log_metric(subset + "_action_acc1_wo_noaction", log["action_acc1_wo_noaction"].avg, step=epoch)
+    ex.log_metric(subset + "_action_acc5_wo_noaction", log["action_acc5_wo_noaction"].avg, step=epoch)
+    [log[key].reset() for key in log.keys()]
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Tube evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
-    main(args)
+
+    params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
+    params["label_list"].append("no action")
+    args.n_classes = len(params["label_list"])
+    if args.dataset == "jhmdb21":
+        args.psn_score_th = params["psn_score_th"]
+        args.iou_th = params["iou_th"]
+
+    main(args, params)

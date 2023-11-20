@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class ActionHead(nn.Module):
-    def __init__(self, in_d=256, nhead=8, n_layers=2, n_classes=24):
+    def __init__(self, in_d: int=256, nhead: int=8, n_layers: int=2, n_classes: int=24):
         super().__init__()
         transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=in_d, nhead=nhead)
         self.transformer_encoder = nn.TransformerEncoder(transformer_encoder_layer, num_layers=n_layers)

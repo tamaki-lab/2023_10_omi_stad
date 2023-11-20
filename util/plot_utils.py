@@ -310,7 +310,7 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
                     color=(0, 0, 0), thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
                 cv2.putText(
-                    frame, text=f"{tube_idx}, {action_id}", org=(x1, y1),
+                    frame, text=f"{label_list[action_id]}", org=(x1+5, y1+10),
                     fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
                     color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
                 )

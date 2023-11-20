@@ -23,37 +23,30 @@ from util.video_map import calc_video_map
 
 
 @torch.no_grad()
-def main(args):
-    params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
-    params["label_list"].append("no action")
-
+def main(args, params):
     device = torch.device(f"cuda:{args.device}")
     seed = args.seed + utils.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
 
-    detr, criterion, postprocessors = build_model(args)
+    detr, _, postprocessors = build_model(args)
     detr.to(device)
     detr.eval()
     pretrain_path_detr = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
     detr.load_state_dict(torch.load(pretrain_path_detr)["model"])
-    criterion.to(device)
-    criterion.eval()
 
     psn_encoder = PersonEncoder().to(device)
     psn_encoder.eval()
-    pretrain_path_encoder = osp.join(args.check_dir, args.load_ex_name, "encoder", f"epoch_{args.load_epoch_encoder}.pth")
+    pretrain_path_encoder = osp.join(args.check_dir, args.dataset, args.load_ex_name, "encoder", f"epoch_{args.load_epoch_encoder}.pth")
     psn_encoder.load_state_dict(torch.load(pretrain_path_encoder))
-    psn_criterion = NPairLoss().to(device)
-    psn_criterion.eval()
 
     action_head = ActionHead(n_classes=args.n_classes).to(device)
     action_head.eval()
-    pretrain_path_head = osp.join(args.check_dir, args.load_ex_name, "head/weight_loss", f"epoch_{args.load_epoch_head}.pth")
+    pretrain_path_head = osp.join(args.check_dir, args.dataset, args.load_ex_name, "head", args.write_ex_name, f"epoch_{args.load_epoch_head}.pth")
     action_head.load_state_dict(torch.load(pretrain_path_head))
 
-    val_loader = get_video_loader("ucf101-24", "val", shuffle=False)
+    val_loader = get_video_loader(args.dataset, "val", shuffle=False)
 
     pred_tubes = []
     video_names = []
@@ -109,22 +102,23 @@ def main(args):
         pred_tubes.append(tube)
         total_tubes += len(tube.tubes)
         pbar_videos.set_postfix_str(f'total_tubes: {total_tubes}, n_tubes: {len(tube.tubes)}')
-        continue
+        # continue
         video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
         make_video_with_actiontube(video_path, params["label_list"], tube.tubes, video_ano, plot_label=True)
-        # make_video_with_actiontube(video_path, params["label_list"], tube.tubes, video_ano, plot_label=False)
-        # exit()
         os.remove("test.avi")
 
     pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
-    print(len(pred_tubes))
-    pred_tubes = [tube for tube in pred_tubes if tube[1]["class"] != args.n_classes]
-    print(len(pred_tubes))
+    print(f"num of pred tubes: {len(pred_tubes)}")
+    pred_tubes = [tube for tube in pred_tubes
+
+
+                  if tube[1]["class"] != args.n_classes]
+    print(f"num of pred tubes w/o no action: {len(pred_tubes)}")
 
     gt_tubes = make_gt_tubes(args.dataset, "val", params)
     gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
 
-    video_ap = calc_video_map(pred_tubes, gt_tubes, args.n_classes)
+    video_ap = calc_video_map(pred_tubes, gt_tubes, args.n_classes, args.tiou_th)
     for class_name, ap in zip(params["label_list"], video_ap):
         print(f"{class_name}: {ap}")
     print(f"v-mAP: {sum(video_ap) / len(video_ap)}")
@@ -134,32 +128,25 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # loader
-    parser.add_argument('--n_frames', default=8, type=int)
+    parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
+    parser.add_argument('--n_frames', default=128, type=int)
 
     # setting
-    parser.add_argument('--dataset', default='ucf101-24', type=str)
-    parser.add_argument('--load_ex_name', default='noskip_th0.7', type=str)
-    parser.add_argument('--write_ex_name', default='test', type=str)
-    parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--load_epoch_encoder', default=100, type=int)
-    parser.add_argument('--load_epoch_head', default=20, type=int)
+    parser.add_argument('--load_ex_name', default='jhmdb_wd:e4', type=str)
+    parser.add_argument('--write_ex_name', default='head_test', type=str)
+    parser.add_argument('--device', default=1, type=int)
+    parser.add_argument('--load_epoch_encoder', default=15, type=int)
+    parser.add_argument('--load_epoch_head', default=14, type=int)
     parser.add_argument('--psn_score_th', default=0.7, type=float)
-    parser.add_argument('--sim_th', default=0.7, type=float)
+    parser.add_argument('--sim_th', default=0.5, type=float)
+    parser.add_argument('--tiou_th', default=0.2, type=float)
     parser.add_argument('--iou_th', default=0.4, type=float)
-    parser.add_argument('--n_classes', default=24, type=int)
-    parser.add_argument('--n_epochs', default=20, type=int)
 
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', default=True,
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
-
-    # action head
-    parser.add_argument('--lr_head', default=1e-4, type=float)
-    parser.add_argument('--weight_decay_head', default=1e-4, type=float)
-    parser.add_argument('--lr_drop_head', default=50, type=int)
-    parser.add_argument('--iter_update', default=8, type=int)
 
     # others
     parser.add_argument('--seed', default=42, type=int)
@@ -172,4 +159,12 @@ def get_args_parser():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('Tube evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
-    main(args)
+
+    params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
+    params["label_list"].append("no action")
+    args.n_classes = len(params["label_list"])
+    if args.dataset == "jhmdb21":
+        args.psn_score_th = params["psn_score_th"]
+        args.iou_th = params["iou_th"]
+
+    main(args, params)
