@@ -1,6 +1,7 @@
 from typing import Tuple
 import torch
 import numpy as np
+from util.box_ops import generalized_box_iou
 
 
 class ActionTubes:
@@ -88,6 +89,22 @@ class ActionTubes:
                 for i in tube.action_id.unique()])
         self.tubes = new_tubes
 
+    def give_action_label(self, no_action_id=-1, iou_th=0.3):
+        for tube in self.tubes:
+            for i, (frame_idx, _) in enumerate(tube.query_indicies):
+                if frame_idx in self.ano:
+                    gt_ano = [ano for tube_idx, ano in self.ano[frame_idx].items()]
+                    gt_boxes = torch.tensor(gt_ano)[:, :4]
+                    iou = generalized_box_iou(tube.bboxes[i].reshape(-1, 4), gt_boxes)
+                    max_v, max_idx = torch.max(iou, dim=1)
+                    if max_v.item() > iou_th:
+                        tube.action_label.append(gt_ano[max_idx][4])
+                    else:
+                        tube.action_label.append(no_action_id)
+                else:
+                    tube.action_label.append(no_action_id)
+
+
 
 class ActionTube:
     def __init__(self, video_name):
@@ -106,3 +123,8 @@ class ActionTube:
         self.decoded_queries.append(query)
         self.psn_embeddings.append(embedding)
         self.bboxes.append(bbox)
+
+    def log_pred(self, outputs):
+        self.action_pred = outputs.softmax(dim=1).cpu().detach()
+        self.action_score = self.action_pred.topk(1, 1)[0].reshape(-1)
+        self.action_id = self.action_pred.topk(1, 1)[1].reshape(-1)

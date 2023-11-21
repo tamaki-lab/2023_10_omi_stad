@@ -123,7 +123,7 @@ def main(args, params):
         # make new video with tube
         continue
         video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
-        utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
+        tube.give_action_label(params["num_classes"], args.iou_th)
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
 

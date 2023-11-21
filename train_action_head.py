@@ -152,7 +152,7 @@ def main(args, params):
             tube.filter()
 
             ## give a label for each query in person list ##
-            utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
+            tube.give_action_label(params["num_classes"], args.iou_th)
 
             # train head
             if len(tube.tubes) == 0:
@@ -167,7 +167,7 @@ def main(args, params):
                 label = torch.Tensor(label).to(torch.int64).to(device)
                 outputs = action_head(input_queries)
                 loss = head_criterion(outputs, label)
-                utils.give_pred(tube.tubes[list_idx], outputs)
+                tube.tubes[list_idx].log_pred(outputs)
                 total_loss += loss
             total_loss = total_loss / (args.iter_update * len(queries_list))
             total_loss.backward()
@@ -231,7 +231,7 @@ def main(args, params):
 
                 tube.filter()
 
-                utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
+                tube.give_action_label(params["num_classes"], args.iou_th)
 
                 if len(tube.tubes) == 0:
                     continue
@@ -244,7 +244,7 @@ def main(args, params):
                     label = torch.Tensor(label).to(torch.int64).to(device)
                     outputs = action_head(input_queries)
                     loss = head_criterion(outputs, label)
-                    utils.give_pred(tube.tubes[list_idx], outputs)
+                    tube.tubes[list_idx].log_pred(outputs)
                     total_loss += loss
                 total_loss = total_loss / (args.iter_update * len(queries_list))
                 acc_dict = utils.calc_acc(tube.tubes, args.n_classes)

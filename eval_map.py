@@ -91,7 +91,7 @@ def main(args, params):
         video_name = "/".join(img_paths[0].parts[-3: -1])
         video_names.append(video_name)
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTubes(video_name, args.sim_th)
+        tube = ActionTubes(video_name, args.sim_th, ano=video_ano)
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         pbar_video.set_description("[Frames Iteration]")
@@ -119,7 +119,8 @@ def main(args, params):
 
         tube.filter()
 
-        utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
+        # utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
+        tube.give_action_label(params["num_classes"], args.iou_th)
 
         if len(tube.tubes) == 0:
             continue
@@ -129,7 +130,8 @@ def main(args, params):
         for list_idx, input_queries in enumerate(queries_list):
             input_queries = torch.stack(input_queries, 0).to(device)
             outputs = action_head(input_queries)
-            utils.give_pred(tube.tubes[list_idx], outputs)
+            # utils.give_pred(tube.tubes[list_idx], outputs)
+            tube.tubes[list_idx].log_pred(outputs)
 
         ## make new video with action tube ##
         tube.split()
