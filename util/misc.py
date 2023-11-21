@@ -119,25 +119,25 @@ def fix_ano_scale(video_ano, resize_scale=512 / 320):
 
 def give_label(video_ano, tubes, no_action_id=-1, iou_th=0.4):
     for tube in tubes:
-        tube["action_label"] = []
-        for i, (frame_idx, _) in enumerate(tube["idx_of_p_queries"]):
+        tube.action_label = []
+        for i, (frame_idx, _) in enumerate(tube.query_indicies):
             if frame_idx in video_ano:
                 gt_ano = [ano for tube_idx, ano in video_ano[frame_idx].items()]
                 gt_boxes = torch.tensor(gt_ano)[:, :4]
-                iou = generalized_box_iou(tube["bbox"][i].reshape(-1, 4), gt_boxes)
+                iou = generalized_box_iou(tube.bboxes[i].reshape(-1, 4), gt_boxes)
                 max_v, max_idx = torch.max(iou, dim=1)
                 if max_v.item() > iou_th:
-                    tube["action_label"].append(gt_ano[max_idx][4])
+                    tube.action_label.append(gt_ano[max_idx][4])
                 else:
-                    tube["action_label"].append(no_action_id)
+                    tube.action_label.append(no_action_id)
             else:
-                tube["action_label"].append(no_action_id)
+                tube.action_label.append(no_action_id)
 
 
 def give_pred(tube, outputs):
-    tube["action_pred"] = outputs.softmax(dim=1).cpu().detach()
-    tube["action_score"] = tube["action_pred"].topk(1, 1)[0].reshape(-1)
-    tube["action_id"] = tube["action_pred"].topk(1, 1)[1].reshape(-1)
+    tube.action_pred = outputs.softmax(dim=1).cpu().detach()
+    tube.action_score = tube.action_pred.topk(1, 1)[0].reshape(-1)
+    tube.action_id = tube.action_pred.topk(1, 1)[1].reshape(-1)
 
 
 def calc_acc(tubes, n_classes):

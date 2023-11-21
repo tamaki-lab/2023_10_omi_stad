@@ -16,7 +16,7 @@ from util.plot_utils import make_video_with_tube
 from models import build_model
 from models.person_encoder import PersonEncoder
 from models.action_head import ActionHead
-from models.tube import ActionTube
+from models.tube import ActionTubes
 
 
 def get_args_parser():
@@ -57,7 +57,6 @@ def get_args_parser():
     return parser
 
 
-# @torch.no_grad()
 def main(args, params):
     device = torch.device(f"cuda:{args.device}")
 
@@ -87,6 +86,8 @@ def main(args, params):
 
     train_loader = get_video_loader(args.dataset, "train")
     val_loader = get_video_loader(args.dataset, "val", shuffle=False)
+    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
+    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
 
     train_log = {"action_loss": utils.AverageMeter(),
                  "action_acc1": utils.AverageMeter(),
@@ -120,7 +121,7 @@ def main(args, params):
 
         for video_idx, (img_paths, video_ano) in pbar_videos:
             sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-            tube = ActionTube()
+            tube = ActionTubes()
 
             # make person lists
             with torch.inference_mode():
@@ -202,7 +203,7 @@ def main(args, params):
             pbar_videos.set_description("[Validation]")
             for video_idx, (img_paths, video_ano) in pbar_videos:
                 sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-                tube = ActionTube()
+                tube = ActionTubes()
 
                 pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
                 pbar_video.set_description("[Frames Iteration]")

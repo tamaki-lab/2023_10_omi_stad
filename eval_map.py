@@ -17,7 +17,7 @@ from util.plot_utils import make_video_with_actiontube
 from models import build_model
 from models.person_encoder import PersonEncoder, NPairLoss
 from models.action_head import ActionHead
-from models.tube import ActionTube
+from models.tube import ActionTubes
 from util.gt_tubes import make_gt_tubes
 from util.video_map import calc_video_map
 
@@ -91,7 +91,7 @@ def main(args, params):
         video_name = "/".join(img_paths[0].parts[-3: -1])
         video_names.append(video_name)
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTube(video_name, args.sim_th)
+        tube = ActionTubes(video_name, args.sim_th)
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         pbar_video.set_description("[Frames Iteration]")
@@ -123,7 +123,8 @@ def main(args, params):
 
         if len(tube.tubes) == 0:
             continue
-        queries_list = [person_list["d_query"] for person_list in tube.tubes]
+        # queries_list = [person_list["d_query"] for person_list in tube.tubes]
+        queries_list = [action_tube.decoded_queries for action_tube in tube.tubes]
 
         for list_idx, input_queries in enumerate(queries_list):
             input_queries = torch.stack(input_queries, 0).to(device)

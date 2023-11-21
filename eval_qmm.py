@@ -16,7 +16,7 @@ from util.gt_tubes import make_gt_tubes
 from util.box_ops import tube_iou
 from models import build_model
 from models.person_encoder import PersonEncoder, NPairLoss
-from models.tube import ActionTube
+from models.tube import ActionTubes
 
 
 def get_args_parser():
@@ -91,7 +91,7 @@ def main(args, params):
         video_name = "/".join(img_paths[0].parts[-3: -1])
         video_names.append(video_name)
         sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTube(video_name, args.sim_th, ano=video_ano)
+        tube = ActionTubes(video_name, args.sim_th, ano=video_ano)
 
         pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
         pbar_video.set_description("[Frames Iteration]")
@@ -196,15 +196,15 @@ if __name__ == '__main__':
         args.psn_score_th = params["psn_score_th"]
         args.iou_th = params["iou_th"]
 
-    # main(args, params)
+    main(args, params)
 
     # load qmm outputs and calc precision and recall #
-    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
-    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
-    pred_tubes = [obj for obj in utils.TarIterator(dir, filename)]
-    gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
-    video_names = [tubes.video_name for tubes in pred_tubes]
-    calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
+    # dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
+    # filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    # pred_tubes = [obj for obj in utils.TarIterator(dir, filename)]
+    # gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
+    # video_names = [tubes.video_name for tubes in pred_tubes]
+    # calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
     # visualization #
     # for tube in pred_tubes:

@@ -3,7 +3,7 @@ import torch
 import numpy as np
 
 
-class ActionTube:
+class ActionTubes:
     def __init__(self, video_name=None, sim_th=0.7, end_consecutive_frames=8, ano=None):
         self.video_name = video_name
         self.tubes = []
@@ -13,7 +13,7 @@ class ActionTube:
         self.ano = ano
 
     def update(self, d_queries, p_queries, frame_idx, psn_indices, psn_boxes):
-        diff_list = [frame_idx - tube["idx_of_p_queries"][-1][0] for tube in self.tubes]
+        diff_list = [frame_idx - tube.query_indicies[-1][0] for tube in self.tubes]
         for list_idx, d in enumerate(diff_list):
             if d >= self.k:
                 self.end_idx.add(list_idx)
@@ -21,28 +21,21 @@ class ActionTube:
         if len(self.tubes) == 0:
             for idx, (d_query, p_query) in enumerate(zip(d_queries, p_queries)):
                 query_idx = psn_indices[idx].item()
-                self.tubes.append({"d_query": [d_query],
-                                   "p_query": [p_query],
-                                   "idx_of_p_queries": [(frame_idx, query_idx)],
-                                   "bbox": [psn_boxes[idx]]})
+                self.tubes.append(ActionTube(self.video_name))
+                self.tubes[-1].link((frame_idx, query_idx), d_query, p_query, psn_boxes[idx])
         else:
             sim_scores = self.sim_scores(self.tubes, p_queries)
             indices_generator = self.find_max_indices(sim_scores.cpu())
             for i, j in indices_generator:
                 query_idx = psn_indices[i].item()
                 if (sim_scores[i, j] > self.sim_th) and (j != -1):
-                    self.tubes[j]["d_query"].append(d_queries[i])
-                    self.tubes[j]["p_query"].append(p_queries[i])
-                    self.tubes[j]["idx_of_p_queries"].append((frame_idx, query_idx))
-                    self.tubes[j]["bbox"].append(psn_boxes[i])
+                    self.tubes[j].link((frame_idx, query_idx), d_queries[i], p_queries[i], psn_boxes[i])
                 else:
-                    self.tubes.append({"d_query": [d_queries[i]],
-                                       "p_query": [p_queries[i]],
-                                       "idx_of_p_queries": [(frame_idx, query_idx)],
-                                       "bbox": [psn_boxes[i]]})
+                    self.tubes.append(ActionTube(self.video_name))
+                    self.tubes[-1].link((frame_idx, query_idx), d_queries[i], p_queries[i], psn_boxes[i])
 
     def sim_scores(self, tubes, p_embedding):
-        final_queries = torch.stack([tube["p_query"][-1] for tube in tubes])
+        final_queries = torch.stack([tube.psn_embeddings[-1] for tube in tubes])
         dot_product = torch.mm(p_embedding, final_queries.t())
         norm_frame_p_f_queries = torch.norm(p_embedding, dim=1).unsqueeze(1)
         norm_final_queries = torch.norm(final_queries, dim=1).unsqueeze(0)
@@ -68,19 +61,19 @@ class ActionTube:
 
     def filter(self, filter_length=16):
         """ exclude short tube """
-        self.tubes = [tube for tube in self.tubes if len(tube["idx_of_p_queries"]) > filter_length]
+        self.tubes = [tube for tube in self.tubes if len(tube.query_indicies) > filter_length]
         for tube in self.tubes:
-            tube["p_query"] = [x.cpu() for x in tube["p_query"]]
-            tube["d_query"] = [x.cpu() for x in tube["d_query"]]
+            tube.psn_embeddings = [x.cpu() for x in tube.psn_embeddings]
+            tube.decoded_queries = [x.cpu() for x in tube.decoded_queries]
 
     def extract(self, tube, indices=None):
         if indices is None:
-            frame_indices = [frame_idx for frame_idx, query_idx in tube["idx_of_p_queries"]]
-            boxes = [box for box in tube["bbox"]]
+            frame_indices = [frame_idx for frame_idx, query_idx in tube.query_indicies]
+            boxes = [box for box in tube.bboxes]
         else:
             indices = torch.where(indices)[0]
-            frame_indices = [tube["idx_of_p_queries"][i][0] for i in indices]
-            boxes = [tube["bbox"][i] for i in indices]
+            frame_indices = [tube.query_indicies[i][0] for i in indices]
+            boxes = [tube.bboxes[i] for i in indices]
         return {frame_idx: bbox for frame_idx, bbox in zip(frame_indices, boxes)}
 
     def split(self):
@@ -90,7 +83,26 @@ class ActionTube:
             new_tubes.extend([(
                 self.video_name,
                 {"class": i.item(),
-                 "score": tube["action_score"][tube["action_id"] == i].mean().item(),
-                 "boxes": self.extract(tube, tube["action_id"] == i)})
-                for i in tube["action_id"].unique()])
+                 "score": tube.action_score[tube.action_id == i].mean().item(),
+                 "boxes": self.extract(tube, tube.action_id == i)})
+                for i in tube.action_id.unique()])
         self.tubes = new_tubes
+
+
+class ActionTube:
+    def __init__(self, video_name):
+        self.video_name = video_name
+        self.query_indicies = []
+        self.decoded_queries = []
+        self.psn_embeddings = []
+        self.bboxes = []
+        self.action_label = []
+        self.action_pred = None
+        self.action_score = None
+        self.action_id = None
+
+    def link(self, query_idx, query, embedding, bbox):
+        self.query_indicies.append(query_idx)
+        self.decoded_queries.append(query)
+        self.psn_embeddings.append(embedding)
+        self.bboxes.append(bbox)
