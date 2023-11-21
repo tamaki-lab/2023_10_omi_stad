@@ -119,25 +119,27 @@ def main(args, params):
 
         tube.filter()
         pred_tubes.append(tube)
+        tube.give_action_label(params["num_classes"], args.iou_th)
 
         # make new video with tube
         continue
         video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
-        tube.give_action_label(params["num_classes"], args.iou_th)
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
 
     dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
     filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
-    utils.write_tar(pred_tubes, dir, filename)
+    utils.write_tar(pred_tubes, dir, "videotubes-" + filename)
+    pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
+    utils.write_tar(pred_tubes, dir, "tube-" + filename)
 
+    video_names = set([tube.video_name for tube in pred_tubes])
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
-    video_names = [tubes.video_name for tubes in pred_tubes]
     calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
 
 def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
-    pred_tubes = [(video_tubes.video_name, video_tubes.extract(tube)) for video_tubes in pred_tubes for tube in video_tubes.tubes]
+    pred_tubes = [(tube.video_name, tube.make_region_pred()) for tube in pred_tubes]
 
     for video_name, tubes_ano in gt_tubes.copy().items():
         gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
@@ -196,21 +198,24 @@ if __name__ == '__main__':
         args.psn_score_th = params["psn_score_th"]
         args.iou_th = params["iou_th"]
 
-    main(args, params)
+    # main(args, params)
+    # exit()
 
-    # load qmm outputs and calc precision and recall #
-    # dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
-    # filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
-    # pred_tubes = [obj for obj in utils.TarIterator(dir, filename)]
-    # gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
-    # video_names = [tubes.video_name for tubes in pred_tubes]
-    # calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
+    # load qmm outputs #
+    id = 0  # 0-> calc precision and recall, 1-> visualization
+    name = ["tube-", "videotubes-"][id]
+    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
+    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    pred_tubes = [obj for obj in utils.TarIterator(dir, name + filename)]
+    gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
+    video_names = [tubes.video_name for tubes in pred_tubes]
 
-    # visualization #
-    # for tube in pred_tubes:
-    #     video_name = tube.video_name
-    #     video_ano = tube.ano
-    #     video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
-    #     utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
-    #     make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
-    #     os.remove("test.avi")
+    if id == 0:  # calc precision and recall
+        calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
+    elif id == 1:  # visualization
+        for tube in pred_tubes:
+            video_name = tube.video_name
+            video_ano = tube.ano
+            video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
+            make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
+            os.remove("test.avi")

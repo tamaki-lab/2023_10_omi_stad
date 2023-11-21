@@ -207,19 +207,19 @@ def make_video_with_tube(video_path, label_list, tubes, video_ano, plot_label=Tr
         frame = frame.to_ndarray(format="rgb24")
 
         for list_idx, tube in enumerate(tubes):
-            for idx, idx_of_query in enumerate(tube["idx_of_p_queries"]):
+            for idx, idx_of_query in enumerate(tube.query_indicies):
                 if frame_idx > idx_of_query[0]:
                     continue
                 elif frame_idx < idx_of_query[0]:
                     break
                 else:
-                    box = tube["bbox"][idx]
+                    box = tube.bboxes[idx]
                     x1, y1, x2, y2 = box
                     x1 = int(max(min(x1, width), 0))
                     x2 = int(max(min(x2, width), 0))
                     y1 = int(max(min(y1, height), 0))
                     y2 = int(max(min(y2, height), 0))
-                    action_id = tube["action_label"][idx]
+                    action_id = tube.action_label[idx]
 
                     cv2.rectangle(
                         frame, pt1=(x1, y1), pt2=(x2, y2),

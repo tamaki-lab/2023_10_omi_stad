@@ -67,26 +67,11 @@ class ActionTubes:
             tube.psn_embeddings = [x.cpu() for x in tube.psn_embeddings]
             tube.decoded_queries = [x.cpu() for x in tube.decoded_queries]
 
-    def extract(self, tube, indices=None):
-        if indices is None:
-            frame_indices = [frame_idx for frame_idx, query_idx in tube.query_indicies]
-            boxes = [box for box in tube.bboxes]
-        else:
-            indices = torch.where(indices)[0]
-            frame_indices = [tube.query_indicies[i][0] for i in indices]
-            boxes = [tube.bboxes[i] for i in indices]
-        return {frame_idx: bbox for frame_idx, bbox in zip(frame_indices, boxes)}
-
     def split(self):
         """ split tube based on predicted action id """
         new_tubes = []
         for tube in self.tubes:
-            new_tubes.extend([(
-                self.video_name,
-                {"class": i.item(),
-                 "score": tube.action_score[tube.action_id == i].mean().item(),
-                 "boxes": self.extract(tube, tube.action_id == i)})
-                for i in tube.action_id.unique()])
+            new_tubes.extend(tube.split_by_action())
         self.tubes = new_tubes
 
     def give_action_label(self, no_action_id=-1, iou_th=0.3):
@@ -103,7 +88,6 @@ class ActionTubes:
                         tube.action_label.append(no_action_id)
                 else:
                     tube.action_label.append(no_action_id)
-
 
 
 class ActionTube:
@@ -128,3 +112,22 @@ class ActionTube:
         self.action_pred = outputs.softmax(dim=1).cpu().detach()
         self.action_score = self.action_pred.topk(1, 1)[0].reshape(-1)
         self.action_id = self.action_pred.topk(1, 1)[1].reshape(-1)
+
+    def make_region_pred(self, indices=None):
+        if indices is None:
+            frame_indices = [frame_idx for frame_idx, query_idx in self.query_indicies]
+            boxes = [box for box in self.bboxes]
+        else:
+            indices = torch.where(indices)[0]
+            frame_indices = [self.query_indicies[i][0] for i in indices]
+            boxes = [self.bboxes[i] for i in indices]
+        return {frame_idx: bbox for frame_idx, bbox in zip(frame_indices, boxes)}
+
+    def split_by_action(self):
+        new_tubes = [(
+            self.video_name,
+            {"class": i.item(),
+             "score": self.action_score[self.action_id == i].mean().item(),
+             "boxes": self.make_region_pred(self.action_id == i)})
+            for i in self.action_id.unique()]
+        return new_tubes
