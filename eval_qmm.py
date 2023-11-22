@@ -130,10 +130,10 @@ def main(args, params):
     dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
     filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     utils.write_tar(pred_tubes, dir, "videotubes-" + filename)
+    video_names = [tube.video_name for tube in pred_tubes]
     pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
     utils.write_tar(pred_tubes, dir, "tube-" + filename)
 
-    video_names = set([tube.video_name for tube in pred_tubes])
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
     calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
 
@@ -194,12 +194,8 @@ if __name__ == '__main__':
     params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
     params["label_list"].append("no action")
 
-    if args.dataset == "jhmdb21":
-        args.psn_score_th = params["psn_score_th"]
-        args.iou_th = params["iou_th"]
-
-    # main(args, params)
-    # exit()
+    main(args, params)
+    exit()
 
     # load qmm outputs #
     id = 0  # 0-> calc precision and recall, 1-> visualization
@@ -208,10 +204,9 @@ if __name__ == '__main__':
     filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     pred_tubes = [obj for obj in utils.TarIterator(dir, name + filename)]
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
-    video_names = [tubes.video_name for tubes in pred_tubes]
 
     if id == 0:  # calc precision and recall
-        calc_precision_recall(pred_tubes, gt_tubes, video_names, args.tiou_th)
+        calc_precision_recall(pred_tubes, gt_tubes, None, args.tiou_th)
     elif id == 1:  # visualization
         for tube in pred_tubes:
             video_name = tube.video_name
