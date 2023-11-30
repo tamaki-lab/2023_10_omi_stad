@@ -1,23 +1,17 @@
 
 import argparse
 import random
-from comet_ml import Experiment
 from tqdm import tqdm
-import os
 import os.path as osp
 import torch
-import torch.nn as nn
 import numpy as np
-import torch
 import yaml
 
-from datasets.dataset import get_video_loader, get_sequential_loader
+from datasets.dataset import get_video_loader
 import util.misc as utils
-from util.plot_utils import make_video_with_actiontube
 from models import build_model
-from models.person_encoder import PersonEncoder, NPairLoss
+from models.person_encoder import PersonEncoder
 from models.action_head import ActionHead
-from models.tube import ActionTubes
 from util.gt_tubes import make_gt_tubes
 from util.video_map import calc_video_map
 
@@ -35,11 +29,11 @@ def get_args_parser():
     parser.add_argument('--write_ex_name', default='head_test', type=str)
     parser.add_argument('--device', default=1, type=int)
     parser.add_argument('--load_epoch_encoder', default=15, type=int)
-    parser.add_argument('--load_epoch_head', default=14, type=int)
-    parser.add_argument('--psn_score_th', default=0.7, type=float)
+    parser.add_argument('--load_epoch_head', default=20, type=int)
+    parser.add_argument('--psn_score_th', default=0.8, type=float)
     parser.add_argument('--sim_th', default=0.5, type=float)
     parser.add_argument('--tiou_th', default=0.2, type=float)
-    parser.add_argument('--iou_th', default=0.4, type=float)
+    parser.add_argument('--iou_th', default=0.3, type=float)
 
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
@@ -63,7 +57,7 @@ def main(args, params):
     np.random.seed(seed)
     random.seed(seed)
 
-    detr, _, postprocessors = build_model(args)
+    detr, _, _ = build_model(args)
     detr.to(device)
     detr.eval()
     pretrain_path_detr = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
@@ -80,75 +74,43 @@ def main(args, params):
     action_head.load_state_dict(torch.load(pretrain_path_head))
 
     loader = get_video_loader(args.dataset, args.subset, shuffle=False)
+    dir = osp.join(args.check_dir, args.dataset, args.load_ex_name, "qmm_tubes")
+    filename = f"tube-epoch:{args.load_epoch_encoder}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    loader = utils.TarIterator(dir + "/" + args.subset, filename)
 
     pred_tubes = []
-    video_names = []
+    video_names = set()
     total_tubes = 0
 
-    pbar_videos = tqdm(enumerate(loader), total=len(loader), leave=False)
-    pbar_videos.set_description("[Validation]")
-    for video_idx, (img_paths, video_ano) in pbar_videos:
-        video_name = "/".join(img_paths[0].parts[-3: -1])
-        video_names.append(video_name)
-        sequential_loader = get_sequential_loader(img_paths, video_ano, args.n_frames)
-        tube = ActionTubes(video_name, args.sim_th, ano=video_ano)
+    pbar_tubes = tqdm(enumerate(loader), total=len(loader), leave=False)
+    pbar_tubes.set_description("[Validation]")
+    for tube_idx, tube in pbar_tubes:
+        # action_label = torch.Tensor(tube.action_label).to(torch.int64).to(device)
+        video_names.add(tube.video_name)
+        decoded_queries = torch.stack(tube.decoded_queries).to(device)
+        frame_indices = [x[0] for x in tube.query_indicies]
+        frame_indices = [x - frame_indices[0] for x in frame_indices]
 
-        pbar_video = tqdm(enumerate(sequential_loader), total=len(sequential_loader), leave=False)
-        pbar_video.set_description("[Frames Iteration]")
-        for clip_idx, (samples, targets) in pbar_video:
-            samples = samples.to(device)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-            outputs = detr(samples)
+        # outputs = action_head(decoded_queries)
+        outputs = action_head(decoded_queries, frame_indices)
+        tube.log_pred(outputs)
 
-            orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-            results = postprocessors['bbox'](outputs, orig_target_sizes)
+        action_tubes = tube.split_by_action()
+        pred_tubes.extend(action_tubes)
+        total_tubes += len(action_tubes)
+        pbar_tubes.set_postfix_str(f'total_tubes: {total_tubes}, n_tubes: {len(action_tubes)}')
 
-            score_filter_indices = [(result["scores"] > args.psn_score_th).nonzero().flatten() for result in results]
-            score_filter_labels = [result["labels"]
-                                   [(result["scores"] > args.psn_score_th).nonzero().flatten()] for result in results]
-            psn_indices = [idx[lab == 1] for idx, lab in zip(score_filter_indices, score_filter_labels)]
-            decoded_queries = [outputs["queries"][0, t][p_idx] for t, p_idx in enumerate(psn_indices)]
-            psn_boxes = [result["boxes"][p_idx].cpu() for result, p_idx in zip(results, psn_indices)]
+        # video_path = osp.join(params["dataset_path_video"], tube.video_name + ".avi")
+        # make_video_with_actiontube(video_path, )
 
-            psn_embedding = psn_encoder(torch.cat(decoded_queries, 0))
-            psn_embedding = utils.arrange_list(psn_indices, psn_embedding)
-
-            for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
-                frame_idx = args.n_frames * clip_idx + t
-                tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
-
-        tube.filter()
-
-        # utils.give_label(video_ano, tube.tubes, params["num_classes"], args.iou_th)
-        tube.give_action_label(params["num_classes"], args.iou_th)
-
-        if len(tube.tubes) == 0:
-            continue
-        # queries_list = [person_list["d_query"] for person_list in tube.tubes]
-        queries_list = [action_tube.decoded_queries for action_tube in tube.tubes]
-
-        for list_idx, input_queries in enumerate(queries_list):
-            input_queries = torch.stack(input_queries, 0).to(device)
-            outputs = action_head(input_queries)
-            # utils.give_pred(tube.tubes[list_idx], outputs)
-            tube.tubes[list_idx].log_pred(outputs)
-
-        ## make new video with action tube ##
-        tube.split()
-        pred_tubes.append(tube)
-        total_tubes += len(tube.tubes)
-        pbar_videos.set_postfix_str(f'total_tubes: {total_tubes}, n_tubes: {len(tube.tubes)}')
-        continue
-        video_path = osp.join(params["dataset_path_video"], video_name + ".avi")
-        make_video_with_actiontube(video_path, params["label_list"], tube.tubes, video_ano, plot_label=True)
-        os.remove("test.avi")
-
-    pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
+    pred_tubes = [tube for tube in pred_tubes]
+    # pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
     print(f"num of pred tubes: {len(pred_tubes)}")
     pred_tubes = [tube for tube in pred_tubes if tube[1]["class"] != params["num_classes"]]
     print(f"num of pred tubes w/o no action: {len(pred_tubes)}")
 
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
+    video_names = list(video_names)
     gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
 
     video_ap = calc_video_map(pred_tubes, gt_tubes, params["num_classes"], args.tiou_th)
@@ -164,8 +126,5 @@ if __name__ == "__main__":
     params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
     params["label_list"].append("no action")
     args.n_classes = len(params["label_list"])
-    if args.dataset == "jhmdb21":
-        args.psn_score_th = params["psn_score_th"]
-        args.iou_th = params["iou_th"]
 
     main(args, params)

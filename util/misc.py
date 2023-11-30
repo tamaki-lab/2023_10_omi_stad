@@ -117,34 +117,21 @@ def fix_ano_scale(video_ano, resize_scale=512 / 320):
     return video_ano_fixed
 
 
-def calc_acc(tubes, n_classes):
-    acc_dict = {"acc1": torch.zeros(1),
-                "acc5": torch.zeros(1),
-                "acc1_wo": torch.zeros(1),
-                "acc5_wo": torch.zeros(1)}
-    n_all_wo = 0
-    for tube in tubes:
-        output = tube["action_pred"]
-        label = tube["action_label"]
-        label = torch.Tensor(label).to(torch.int64)
-        acc1, acc5 = utils.accuracy(output, label, topk=(1, 5))
-        acc_dict["acc1"] += acc1
-        acc_dict["acc5"] += acc5
-        if (label != n_classes).sum() == 0:
-            n_all_wo += 1
-            continue
-        else:
-            acc1_wo, acc5_wo = utils.accuracy(output[label != n_classes], label[label != n_classes], topk=(1, 5))
-            acc_dict["acc1_wo"] += acc1_wo
-            acc_dict["acc5_wo"] += acc5_wo
-    acc_dict["acc1"] = acc_dict["acc1"] / len(tubes)
-    acc_dict["acc5"] = acc_dict["acc5"] / len(tubes)
-    if len(tubes) != n_all_wo:
-        acc_dict["acc1_wo"] = acc_dict["acc1_wo"] / (len(tubes) - n_all_wo)
-        acc_dict["acc5_wo"] = acc_dict["acc5_wo"] / (len(tubes) - n_all_wo)
-    else:
+def calc_acc(output, label, n_classes):
+    acc_dict = {}
+    label = label.to(output.device)
+
+    acc1, acc5 = utils.accuracy(output, label, topk=(1, 5))
+    acc_dict["acc1"] = acc1
+    acc_dict["acc5"] = acc5
+    if (label != n_classes).sum() == 0:
         acc_dict["acc1_wo"] = -1
         acc_dict["acc5_wo"] = -1
+    else:
+        acc1_wo, acc5_wo = utils.accuracy(output[label != n_classes], label[label != n_classes], topk=(1, 5))
+        acc_dict["acc1_wo"] = acc1_wo
+        acc_dict["acc5_wo"] = acc5_wo
+
     return acc_dict
 
 
