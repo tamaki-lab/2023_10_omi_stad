@@ -11,9 +11,10 @@ from datasets.dataset import get_video_loader
 import util.misc as utils
 from models import build_model
 from models.person_encoder import PersonEncoder
-from models.action_head import ActionHead
+from models.action_head import ActionHead, ActionHead2, X3D_XS
 from util.gt_tubes import make_gt_tubes
 from util.video_map import calc_video_map
+from datasets.dataset import VideoDataset
 
 
 def get_args_parser():
@@ -69,6 +70,7 @@ def main(args, params):
     psn_encoder.load_state_dict(torch.load(pretrain_path_encoder))
 
     action_head = ActionHead(n_classes=args.n_classes).to(device)
+    # action_head = ActionHead2(n_classes=args.n_classes).to(device)
     action_head.eval()
     pretrain_path_head = osp.join(args.check_dir, args.dataset, args.load_ex_name, "head", args.write_ex_name, f"epoch_{args.load_epoch_head}.pth")
     action_head.load_state_dict(torch.load(pretrain_path_head))
@@ -77,6 +79,10 @@ def main(args, params):
     dir = osp.join(args.check_dir, args.dataset, args.load_ex_name, "qmm_tubes")
     filename = f"tube-epoch:{args.load_epoch_encoder}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     loader = utils.TarIterator(dir + "/" + args.subset, filename)
+
+    val_dataset = VideoDataset(args.dataset, args.subset)
+    x3d_xs = X3D_XS().to(device)
+    x3d_xs.eval()
 
     pred_tubes = []
     video_names = set()
@@ -91,8 +97,13 @@ def main(args, params):
         frame_indices = [x[0] for x in tube.query_indicies]
         frame_indices = [x - frame_indices[0] for x in frame_indices]
 
+        # frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device)
+        # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset, device)
+
         # outputs = action_head(decoded_queries)
         outputs = action_head(decoded_queries, frame_indices)
+        # outputs = action_head(frame_features, decoded_queries, frame_indices)
+
         tube.log_pred(outputs)
 
         action_tubes = tube.split_by_action()

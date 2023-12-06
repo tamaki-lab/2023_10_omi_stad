@@ -10,14 +10,14 @@ import torch
 import torch.nn as nn
 import yaml
 import random
+# from PIL import Image
 
-
-from datasets.dataset import get_video_loader, get_sequential_loader
+from datasets.dataset import VideoDataset
 import util.misc as utils
 from util.plot_utils import make_video_with_tube
 from models import build_model
 from models.person_encoder import PersonEncoder
-from models.action_head import ActionHead
+from models.action_head import ActionHead, ActionHead2, X3D_XS
 from models.tube import ActionTubes
 
 
@@ -80,7 +80,8 @@ def main(args, params):
     trained_psn_encoder_path = osp.join(args.check_dir, args.dataset, args.load_ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
 
-    action_head = ActionHead(n_classes=args.n_classes).to(device)
+    # action_head = ActionHead(n_classes=args.n_classes).to(device)
+    action_head = ActionHead2(n_classes=args.n_classes).to(device)
     # head_criterion = nn.CrossEntropyLoss(weight=torch.tensor([1.0] * args.n_classes + [0.05])).to(device)
     head_criterion = nn.CrossEntropyLoss()
     optimizer_head = torch.optim.AdamW(action_head.parameters(), lr=args.lr_head, weight_decay=args.weight_decay_head)
@@ -91,6 +92,12 @@ def main(args, params):
     filename = f"tube-epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     train_loader = utils.TarIterator(dir + "/train", filename)
     val_loader = utils.TarIterator(dir+"/val", filename)
+
+    train_dataset = VideoDataset(args.dataset, "train")
+    val_dataset = VideoDataset(args.dataset, "val")
+    # x3d_xs = X3D_XS()
+    x3d_xs = X3D_XS().to(device)
+    x3d_xs.eval()
 
     train_log = {"loss": utils.AverageMeter(),
                  "acc1": utils.AverageMeter(),
@@ -130,6 +137,9 @@ def main(args, params):
             frame_indices = [x[0] for x in tube.query_indicies]
             frame_indices = [x - frame_indices[0] for x in frame_indices]
 
+            frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, train_dataset, device, True)
+            # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, True)
+
             action_label = torch.Tensor(tube.action_label).to(torch.int64).to(device)
             decoded_queries = torch.stack(tube.decoded_queries).to(device)
 
@@ -137,7 +147,8 @@ def main(args, params):
                 optimizer_head.zero_grad()
 
             # outputs = action_head(decoded_queries)
-            outputs = action_head(decoded_queries, frame_indices)
+            # outputs = action_head(decoded_queries, frame_indices)
+            outputs = action_head(frame_features, decoded_queries, frame_indices)
             tube.log_pred(outputs)
             loss = head_criterion(outputs, action_label) / args.iter_update
             loss.backward()
@@ -181,7 +192,11 @@ def main(args, params):
                 frame_indices = [x[0] for x in tube.query_indicies]
                 frame_indices = [x - frame_indices[0] for x in frame_indices]
 
-                outputs = action_head(decoded_queries, frame_indices)
+                frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device)
+                # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset)
+
+                outputs = action_head(frame_features, decoded_queries, frame_indices)
+                # outputs = action_head(decoded_queries, frame_indices)
                 # outputs = action_head(decoded_queries)
                 tube.log_pred(outputs)
                 loss = head_criterion(outputs, action_label)
@@ -225,6 +240,18 @@ def random_idx_list(length):
     percentage = random.uniform(0.7, 1.0)
     idx_list = sorted(random.sample(lst, int(length * percentage)))
     return idx_list
+
+
+# @torch.no_grad()
+# def get_frame_features(backbone, video_name, frame_indices, videos_dataset):
+#     device = backbone[0].body.conv1.weight.device
+#     idx = videos_dataset.video_name_list.index(video_name)
+#     img_paths, _ = videos_dataset.__getitem__(idx)
+#     img_paths = [img_paths[frame_idx] for frame_idx in frame_indices]
+#     video_data = VideoData(img_paths, None)
+#     imgs = [video_data.transform(Image.open(img_path)) for img_path in img_paths]
+#     features = backbone(utils.nested_tensor_from_tensor_list(torch.stack(imgs, dim=0).to(device)))[0][0].tensors
+#     return features
 
 
 if __name__ == '__main__':
