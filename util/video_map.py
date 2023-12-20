@@ -86,6 +86,7 @@ def calc_video_ap(
         video_gt_tubes = gt_tubes[video_name]
         tiou_list = []
         for tube_idx, gt_tube in enumerate(video_gt_tubes):
+            # tiou_list.append(tube_iou(pred_tube[1], gt_tube, label_centric=True))
             tiou_list.append(tube_iou(pred_tube[1], gt_tube))
         if len(tiou_list) == 0:
             fp += 1

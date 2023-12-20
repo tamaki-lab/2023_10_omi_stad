@@ -333,10 +333,11 @@ def build(args):
         aux_loss=False,
     )
 
-    # matcher = HungarianMatcher(cost_class=1, cost_bbox=1, cost_giou=9)
-    # weight_dict = {'loss_ce': 1, 'loss_bbox': 1, 'loss_giou': 9}
-    matcher = HungarianMatcher(cost_class=1, cost_bbox=5, cost_giou=2)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': 5, 'loss_giou': 2}
+    # weight_dict = {'loss_ce': 1, 'loss_bbox': 5, 'loss_giou': 2}
+    weight_dict = {'loss_ce': 2, 'loss_bbox': 5, 'loss_giou': 2}
+    matcher = HungarianMatcher(cost_class=weight_dict["loss_ce"],
+                               cost_bbox=weight_dict['loss_bbox'],
+                               cost_giou=weight_dict["loss_giou"])
 
     losses = ['labels', 'boxes', 'cardinality']
 

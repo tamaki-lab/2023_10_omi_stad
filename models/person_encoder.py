@@ -124,9 +124,12 @@ def make_same_person_list(p_f_queries, same_person_label, n_gt_bbox_list, bs, n_
     split_idx_list = [[None] * n_frames for _ in range(bs)]
     total = 0
     for i, n_gt_boxes in enumerate(n_gt_bbox_list):
-        split_idx_list[i // bs][i % n_frames] = total
-        split_p_f_queries[i // bs][i % n_frames] = p_f_queries[total:total + n_gt_boxes]
-        split_same_person_label[i // bs][i % n_frames] = same_person_label[total:total + n_gt_boxes]
+        split_idx_list[i // n_frames][i % n_frames] = total
+        split_p_f_queries[i // n_frames][i % n_frames] = p_f_queries[total:total + n_gt_boxes]
+        split_same_person_label[i // n_frames][i % n_frames] = same_person_label[total:total + n_gt_boxes]
+        # split_idx_list[i // bs][i % n_frames] = total
+        # split_p_f_queries[i // bs][i % n_frames] = p_f_queries[total:total + n_gt_boxes]
+        # split_same_person_label[i // bs][i % n_frames] = same_person_label[total:total + n_gt_boxes]
         total += n_gt_boxes
     tauple_list = [make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label, clip_split_idx) for clip_p_f_queries, clip_same_person_label, clip_split_idx in zip(split_p_f_queries, split_same_person_label, split_idx_list)]
     scores_list = [tauple[0] for tauple in tauple_list]
@@ -151,7 +154,7 @@ def make_same_person_list_in_clip(clip_p_f_queries, clip_same_person_label, clip
     return scores, same_person_lists
 
 
-def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, frame_split_idx, th=0.70):
+def calc_sim(same_person_lists, frame_p_f_queries, frame_same_person_label, frame_split_idx, th=0.5):
     if len(same_person_lists) == 0:
         for i, (p_f_query, target_psn_id) in enumerate(zip(frame_p_f_queries, frame_same_person_label)):
             same_person_lists.append({"query": [p_f_query], "target_id": [target_psn_id.item()], "idx_of_p_queries": [frame_split_idx + i]})

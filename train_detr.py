@@ -19,7 +19,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # setting #
-    parser.add_argument('--epochs', default=30, type=int)
+    parser.add_argument('--epochs', default=25, type=int)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='test', type=str)
     # loader
@@ -55,17 +55,10 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    detr, criterion, postprocessors = build_model(args)
+    detr, criterion, _ = build_model(args)
     criterion.to(device)
     detr.to(device)
 
-    # for name, param in detr.named_parameters():
-    #     if ("class" in name) or ("bbox") in name:
-    #         continue
-    #     else:
-    #         param.requires_grad = False
-
-    # optimizer = torch.optim.AdamW(list(detr.class_embed.parameters()) + list(detr.bbox_embed.parameters()), lr=args.lr, weight_decay=args.weight_decay)
     optimizer = torch.optim.AdamW(detr.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
@@ -76,11 +69,11 @@ def main(args):
     pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
     detr.load_state_dict(torch.load(pretrain_path)["model"])
 
-    train_log = {"total_loss": utils.AverageMeter(),
+    train_log = {"class_error": utils.AverageMeter(),
                  "class_loss": utils.AverageMeter(),
                  "bbox_loss": utils.AverageMeter(),
                  "giou_loss": utils.AverageMeter()}
-    val_log = {"total_loss": utils.AverageMeter(),
+    val_log = {"class_error": utils.AverageMeter(),
                "class_loss": utils.AverageMeter(),
                "bbox_loss": utils.AverageMeter(),
                "giou_loss": utils.AverageMeter()}
@@ -89,6 +82,7 @@ def main(args):
         project_name="stal",
         workspace="kazukiomi",
     )
+    ex.add_tag("train detr head")
     hyper_params = {
         "dataset": args.dataset,
         "ex_name": args.ex_name,
@@ -111,12 +105,15 @@ def main(args):
         train(detr, criterion, train_loader, optimizer, device, epoch, train_log, ex)
         leave_ex(ex, "train", train_log, epoch)
 
-        lr_scheduler.step()
+        # lr_scheduler.step()
 
         evaluate(detr, criterion, val_loader, device, val_log)
         leave_ex(ex, "val", val_log, epoch)
 
         utils.save_checkpoint(detr, osp.join(args.check_dir, args.dataset), args.ex_name + "/detr", epoch)
+
+        if epoch == 20 - 1:
+            fix_params(detr)
 
 
 def train(detr: torch.nn.Module, criterion: torch.nn.Module,
@@ -146,11 +143,11 @@ def train(detr: torch.nn.Module, criterion: torch.nn.Module,
         total_loss.backward()
         optimizer.step()
 
-        update_log(log, total_loss, loss_list, b)
+        update_log(log, loss_dict, b)
 
-        pbar_batch.set_postfix_str(f'loss_avg={round(log["total_loss"].avg,3)}, loss_val={round(log["total_loss"].val,3)}')
+        pbar_batch.set_postfix_str(f'class_error={round(log["class_error"].avg,3)}, class_loss={round(log["class_loss"].avg,3)}, bbox_loss={round(log["bbox_loss"].avg,3)}, giou_loss={round(log["giou_loss"].avg,3)}')
 
-        ex.log_metric("batch_total_loss", log["total_loss"].avg, step=step + i)
+        ex.log_metric("batch_class_error", log["class_error"].avg, step=step + i)
         ex.log_metric("batch_class_loss", log["class_loss"].avg, step=step + i)
         ex.log_metric("batch_bbox_loss", log["bbox_loss"].avg, step=step + i)
         ex.log_metric("batch_giou_loss", log["giou_loss"].avg, step=step + i)
@@ -172,22 +169,28 @@ def evaluate(detr, criterion, loader, device, log):
 
         outputs = detr(samples)
         loss_dict, _ = criterion(outputs, targets)
-        weight_dict = criterion.weight_dict
-        loss_list = [loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict]
-        total_loss = sum(loss_list)
 
-        update_log(log, total_loss, loss_list, b)
+        update_log(log, loss_dict, b)
 
 
-def update_log(log, total_loss, loss_list, b):
-    log["total_loss"].update(total_loss.item(), b)
-    log["class_loss"].update(loss_list[0].item(), b)
-    log["bbox_loss"].update(loss_list[1].item(), b)
-    log["giou_loss"].update(loss_list[2].item(), b)
+def fix_params(detr):
+    for name, param in detr.named_parameters():
+        # if ("class" in name) or ("bbox" in name):
+        if "bbox" in name:
+            continue
+        else:
+            param.requires_grad = False
+
+
+def update_log(log, loss_dict, b):
+    log["class_error"].update(loss_dict["class_error"].item(), b)
+    log["class_loss"].update(loss_dict["loss_ce"].item(), b)
+    log["bbox_loss"].update(loss_dict["loss_bbox"].item(), b)
+    log["giou_loss"].update(loss_dict["loss_giou"].item(), b)
 
 
 def leave_ex(ex, subset, log, epoch):
-    ex.log_metric("epoch_" + subset + "_total_loss", log["total_loss"].avg, step=epoch)
+    ex.log_metric("epoch_" + subset + "_class_error", log["class_error"].avg, step=epoch)
     ex.log_metric("epoch_" + subset + "_class_loss", log["class_loss"].avg, step=epoch)
     ex.log_metric("epoch_" + subset + "_bbox_loss", log["bbox_loss"].avg, step=epoch)
     ex.log_metric("epoch_" + subset + "_giou_loss", log["giou_loss"].avg, step=epoch)

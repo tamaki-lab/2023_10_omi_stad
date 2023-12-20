@@ -13,7 +13,7 @@ class ActionTubes:
         self.k = end_consecutive_frames
         self.ano = ano
 
-    def update(self, d_queries, p_queries, frame_idx, psn_indices, psn_boxes):
+    def update(self, d_queries, p_queries, frame_idx, psn_indices, psn_boxes, cues="feature"):
         diff_list = [frame_idx - tube.query_indicies[-1][0] for tube in self.tubes]
         for list_idx, d in enumerate(diff_list):
             if d >= self.k:
@@ -25,15 +25,22 @@ class ActionTubes:
                 self.tubes.append(ActionTube(self.video_name))
                 self.tubes[-1].link((frame_idx, query_idx), d_query, p_query, psn_boxes[idx])
         else:
-            sim_scores = self.sim_scores(self.tubes, p_queries)
-            indices_generator = self.find_max_indices(sim_scores.cpu())
+            if cues == "feature":
+                scores = self.sim_scores(self.tubes, p_queries)
+            elif cues == "iou":
+                tubes_boxes = torch.stack([tube.bboxes[-1] for tube in self.tubes])
+                scores = generalized_box_iou(psn_boxes, tubes_boxes)
+            indices_generator = self.find_max_indices(scores.cpu().clone())
+
             for i, j in indices_generator:
                 query_idx = psn_indices[i].item()
-                if (sim_scores[i, j] > self.sim_th) and (j != -1):
+                if (scores[i, j] > self.sim_th) and (j != -1):
                     self.tubes[j].link((frame_idx, query_idx), d_queries[i], p_queries[i], psn_boxes[i])
                 else:
                     self.tubes.append(ActionTube(self.video_name))
                     self.tubes[-1].link((frame_idx, query_idx), d_queries[i], p_queries[i], psn_boxes[i])
+
+
 
     def sim_scores(self, tubes, p_embedding):
         final_queries = torch.stack([tube.psn_embeddings[-1] for tube in tubes])
@@ -108,10 +115,10 @@ class ActionTube:
         self.psn_embeddings.append(embedding)
         self.bboxes.append(bbox)
 
-    def log_pred(self, outputs):
+    def log_pred(self, outputs, topk=1):
         self.action_pred = outputs.softmax(dim=1).cpu().detach()
-        self.action_score = self.action_pred.topk(1, 1)[0].reshape(-1)
-        self.action_id = self.action_pred.topk(1, 1)[1].reshape(-1)
+        self.action_score = self.action_pred.topk(topk, 1)[0]
+        self.action_id = self.action_pred.topk(topk, 1)[1]
 
     def make_region_pred(self, indices=None):
         if indices is None:

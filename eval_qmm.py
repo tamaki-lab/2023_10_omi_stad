@@ -25,12 +25,13 @@ def get_args_parser():
     # setting #
     parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--ex_name', default='jhmdb_wd:e4', type=str)
+    parser.add_argument('--qmm_name', default='w:152', type=str)
+    parser.add_argument('--link_cues', default='feature', type=str)
     # loader
     parser.add_argument('--n_frames', default=128, type=int)
     parser.add_argument('--subset', default="val", type=str, choices=["train", "val"])
     # person encoder
-    parser.add_argument('--load_epoch', default=15, type=int)
+    parser.add_argument('--load_epoch', default=20, type=int)
     parser.add_argument('--psn_score_th', default=0.9, type=float)
     parser.add_argument('--sim_th', default=0.5, type=float)
     parser.add_argument('--tiou_th', default=0.2, type=float)
@@ -61,21 +62,19 @@ def main(args, params):
     np.random.seed(seed)
     random.seed(seed)
 
-    detr, criterion, postprocessors = build_model(args)
+    detr, _, postprocessors = build_model(args)
     detr.to(device)
     detr.eval()
     if args.dataset == "ucf101-24":
-        pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
+        pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
         detr.load_state_dict(torch.load(pretrain_path))
     else:
         pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
         detr.load_state_dict(torch.load(pretrain_path)["model"])
-    criterion.to(device)
-    criterion.eval()
 
     psn_encoder = PersonEncoder(skip=args.is_skip).to(device)
     psn_encoder.eval()
-    dir_encoder = osp.join(args.check_dir, args.dataset, args.ex_name, "encoder")
+    dir_encoder = osp.join(args.check_dir, args.dataset, args.qmm_name, "encoder")
     trained_psn_encoder_path = osp.join(dir_encoder, f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
     psn_criterion = NPairLoss().to(device)
@@ -115,7 +114,7 @@ def main(args, params):
 
             for t, (d_queries, p_embed) in enumerate(zip(decoded_queries, psn_embedding)):
                 frame_idx = args.n_frames * clip_idx + t
-                tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t])
+                tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t], args.link_cues)
 
         tube.filter()
         pred_tubes.append(tube)
@@ -127,8 +126,12 @@ def main(args, params):
         make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano=video_ano, plot_label=True)
         os.remove("test.avi")
 
-    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
-    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    if args.link_cues == "feature":
+        dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes", args.subset)
+        filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    elif args.link_cues == "iou":
+        dir = osp.join(args.check_dir, args.dataset, "iou_link", "qmm_tubes", args.subset)
+        filename = f"iouth:{args.sim_th}"
     utils.write_tar(pred_tubes, dir, "videotubes-" + filename)
     video_names = [tube.video_name for tube in pred_tubes]
     pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
@@ -160,6 +163,7 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
         video_gt_tubes = gt_tubes[video_name]
         tiou_list = []
         for _, gt_tube in enumerate(video_gt_tubes):
+            # tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(True, 0.35)))
             tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(False, 0.35)))
         max_tiou = max(tiou_list)   # TODO gt bboxが1つも存在しない場合の考慮
         max_index = tiou_list.index(max_tiou)
@@ -187,6 +191,67 @@ def calc_precision_recall(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
     print(f"Precision: {round(tp/len(pred_tubes),3)}, Precision (filter): {round(tp/n_pred,3)}")
     print(f"Recall: {round(tp/n_gt,3)}")
 
+def calc_precision_recall_per_class(pred_tubes, gt_tubes, label_list, video_names=None, tiou_th=0.5):
+    print("Settings")
+    print(f"psn_socore_th: {args.psn_score_th}")
+    print(f"sim_th: {args.sim_th}")
+    print(f"tiou_th: {args.tiou_th}")
+    print("-----------------------")
+
+    pred_tubes = [(tube.video_name, tube.make_region_pred()) for tube in pred_tubes]
+    pred_tubes_per_class = {label: [] for label in label_list}
+    for pred_tube in pred_tubes:
+        cls = pred_tube[0].split("/")[0]
+        pred_tubes_per_class[cls].append(pred_tube)
+
+    for video_name, tubes_ano in gt_tubes.copy().items():
+        gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
+
+    if video_names is None:
+        correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items()}
+    else:
+        gt_tubes = {name: tubes for name, tubes in gt_tubes.items() if name in video_names}
+        correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items() if name in video_names}
+
+    gt_tubes_per_class = {label: {} for label in label_list}
+    for name, tube in gt_tubes.items():
+        cls = name.split("/")[0]
+        gt_tubes_per_class[cls][name] = tube
+
+    for cls in label_list:
+        n_gt = sum([len(tubes) for _, tubes in gt_tubes_per_class[cls].items()])
+        tp = 0
+        n_pred = 0
+
+        pbar_preds = tqdm(enumerate(pred_tubes_per_class[cls]), total=len(pred_tubes_per_class[cls]), leave=False)
+        pbar_preds.set_description(f"[Calc TP@{cls}]")
+        for _, (video_name, pred_tube) in pbar_preds:
+            video_gt_tubes = gt_tubes_per_class[cls][video_name]
+            tiou_list = []
+            for _, gt_tube in enumerate(video_gt_tubes):
+                # tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(True, 0.35)))
+                tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(False, 0.35)))
+            max_tiou = max(tiou_list)   # TODO gt bboxが1つも存在しない場合の考慮
+            max_index = tiou_list.index(max_tiou)
+            if max_tiou > tiou_th:
+                if correct_map[video_name][max_index]:
+                    continue
+                else:
+                    correct_map[video_name][max_index] = True
+                    tp += 1
+                    n_pred += 1
+            else:
+                n_pred += 1
+
+        print("-------")
+        print(cls)
+        print(f"n_gt_tubes: {n_gt}")
+        print(f"n_pred_tubes: {len(pred_tubes_per_class[cls])}, n_pred_tubes (filter): {n_pred}")
+        print(f"True Positive: {tp}")
+        print(f"Precision: {round(tp/len(pred_tubes_per_class[cls]),3)}, Precision (filter): {round(tp/n_pred,3)}")
+        print(f"Recall: {round(tp/n_gt,3)}")
+        print("-------")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Tube evaluation script', parents=[get_args_parser()])
@@ -194,19 +259,24 @@ if __name__ == '__main__':
     params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
     params["label_list"].append("no action")
 
-    main(args, params)
-    exit()
+    # main(args, params)
+    # exit()
 
     # load qmm outputs #
     id = 0  # 0-> calc precision and recall, 1-> visualization
     name = ["tube-", "videotubes-"][id]
-    dir = osp.join(args.check_dir, args.dataset, args.ex_name, "qmm_tubes", args.subset)
-    filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
-    pred_tubes = [obj for obj in utils.TarIterator(dir, name + filename)]
+    if args.link_cues == "feature":
+        dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes", args.subset)
+        filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    elif args.link_cues == "iou":
+        dir = osp.join(args.check_dir, args.dataset, "iou_link", "qmm_tubes", args.subset)
+        filename = f"iouth:{args.sim_th}"
+    pred_tubes = [obj for obj in tqdm(utils.TarIterator(dir, name + filename))]
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
 
     if id == 0:  # calc precision and recall
-        calc_precision_recall(pred_tubes, gt_tubes, None, args.tiou_th)
+        # calc_precision_recall(pred_tubes, gt_tubes, None, args.tiou_th)
+        calc_precision_recall_per_class(pred_tubes, gt_tubes, params["label_list"][:-1], None, args.tiou_th)
     elif id == 1:  # visualization
         for tube in pred_tubes:
             video_name = tube.video_name

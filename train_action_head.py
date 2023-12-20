@@ -14,11 +14,9 @@ import random
 
 from datasets.dataset import VideoDataset
 import util.misc as utils
-from util.plot_utils import make_video_with_tube
 from models import build_model
 from models.person_encoder import PersonEncoder
 from models.action_head import ActionHead, ActionHead2, X3D_XS
-from models.tube import ActionTubes
 
 
 def get_args_parser():
@@ -27,17 +25,15 @@ def get_args_parser():
     # setting #
     parser.add_argument('--n_epochs', default=20, type=int)
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--write_ex_name', default='head_test', type=str)
+    parser.add_argument('--head_name', default='head_test', type=str)
     # loader
     parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
-    parser.add_argument('--n_frames', default=128, type=int)
 
     # person encoder
-    parser.add_argument('--load_ex_name', default='jhmdb_wd:e4', type=str)
-    parser.add_argument('--load_epoch', default=15, type=int)
+    parser.add_argument('--qmm_name', default='jhmdb_wd:e4', type=str)
+    parser.add_argument('--load_epoch', default=20, type=int)
     parser.add_argument('--psn_score_th', default=0.8, type=float)
     parser.add_argument('--sim_th', default=0.5, type=float)
-    parser.add_argument('--iou_th', default=0.3, type=float)
 
     # Backbone
     parser.add_argument('--backbone', default='resnet101', type=str, choices=('resnet50', 'resnet101'),
@@ -67,35 +63,36 @@ def main(args, params):
     np.random.seed(seed)
     random.seed(seed)
 
-    detr, criterion, postprocessors = build_model(args)
+    detr, _, _ = build_model(args)
     detr.to(device)
     detr.eval()
-    pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
-    detr.load_state_dict(torch.load(pretrain_path)["model"])
-    criterion.to(device)
-    criterion.eval()
+    if args.dataset == "ucf101-24":
+        pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
+        detr.load_state_dict(torch.load(pretrain_path))
+    else:
+        pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
+        detr.load_state_dict(torch.load(pretrain_path)["model"])
 
     psn_encoder = PersonEncoder().to(device)
     psn_encoder.eval()
-    trained_psn_encoder_path = osp.join(args.check_dir, args.dataset, args.load_ex_name, "encoder", f"epoch_{args.load_epoch}.pth")
+    trained_psn_encoder_path = osp.join(args.check_dir, args.dataset, args.qmm_name, "encoder", f"epoch_{args.load_epoch}.pth")
     psn_encoder.load_state_dict(torch.load(trained_psn_encoder_path))
 
     # action_head = ActionHead(n_classes=args.n_classes).to(device)
     action_head = ActionHead2(n_classes=args.n_classes).to(device)
-    # head_criterion = nn.CrossEntropyLoss(weight=torch.tensor([1.0] * args.n_classes + [0.05])).to(device)
-    head_criterion = nn.CrossEntropyLoss()
+    head_criterion = nn.CrossEntropyLoss(weight=torch.tensor([1.0] * params["num_classes"] + [0.1])).to(device)
+    # head_criterion = nn.CrossEntropyLoss()
     optimizer_head = torch.optim.AdamW(action_head.parameters(), lr=args.lr_head, weight_decay=args.weight_decay_head)
     lr_scheduler_head = torch.optim.lr_scheduler.StepLR(optimizer_head, args.lr_drop_head)
 
     # train_loader = get_video_loader(args.dataset, "train")
-    dir = osp.join(args.check_dir, args.dataset, args.load_ex_name, "qmm_tubes")
+    dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes")
     filename = f"tube-epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     train_loader = utils.TarIterator(dir + "/train", filename)
-    val_loader = utils.TarIterator(dir+"/val", filename)
+    val_loader = utils.TarIterator(dir + "/val", filename)
 
     train_dataset = VideoDataset(args.dataset, "train")
     val_dataset = VideoDataset(args.dataset, "val")
-    # x3d_xs = X3D_XS()
     x3d_xs = X3D_XS().to(device)
     x3d_xs.eval()
 
@@ -114,8 +111,9 @@ def main(args, params):
         project_name="stal",
         workspace="kazukiomi",
     )
+    ex.add_tag("train action head")
     hyper_params = {
-        "ex_name": args.load_ex_name + "--" + args.write_ex_name,
+        "ex_name": args.qmm_name + "--" + args.head_name,
     }
     ex.log_parameters(hyper_params)
 
@@ -138,7 +136,7 @@ def main(args, params):
             frame_indices = [x - frame_indices[0] for x in frame_indices]
 
             frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, train_dataset, device, True)
-            # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, True)
+            # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, device, True)
 
             action_label = torch.Tensor(tube.action_label).to(torch.int64).to(device)
             decoded_queries = torch.stack(tube.decoded_queries).to(device)
@@ -146,14 +144,13 @@ def main(args, params):
             if tube_idx % args.iter_update == 0:
                 optimizer_head.zero_grad()
 
-            # outputs = action_head(decoded_queries)
             # outputs = action_head(decoded_queries, frame_indices)
             outputs = action_head(frame_features, decoded_queries, frame_indices)
             tube.log_pred(outputs)
             loss = head_criterion(outputs, action_label) / args.iter_update
             loss.backward()
 
-            acc_dict = utils.calc_acc(tube.action_pred, action_label, args.n_classes)
+            acc_dict = utils.calc_acc(tube.action_pred, action_label, params["num_classes"])
             if tube_idx % args.iter_update == args.iter_update - 1:
                 optimizer_head.step()
 
@@ -172,11 +169,6 @@ def main(args, params):
 
             pbar_tubes.set_postfix_str(f'loss={round(train_log["loss"].avg, 3)}, acc1: {round(train_log["acc1"].avg, 3)}, acc1_w/o: {round(train_log["acc1_wo_noaction"].avg, 3)}')
 
-            # make new video with tube
-            continue
-            video_path = osp.join(params["dataset_path_video"], tube.video_name + ".avi")
-            make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano)
-            os.remove("test.avi")
         leave_ex(ex, "train", train_log, epoch)
 
         # validation
@@ -193,15 +185,14 @@ def main(args, params):
                 frame_indices = [x - frame_indices[0] for x in frame_indices]
 
                 frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device)
-                # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset)
+                # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset, device)
 
                 outputs = action_head(frame_features, decoded_queries, frame_indices)
                 # outputs = action_head(decoded_queries, frame_indices)
-                # outputs = action_head(decoded_queries)
                 tube.log_pred(outputs)
                 loss = head_criterion(outputs, action_label)
 
-                acc_dict = utils.calc_acc(tube.action_pred, action_label, args.n_classes)
+                acc_dict = utils.calc_acc(tube.action_pred, action_label, params["num_classes"])
 
                 val_log["loss"].update(loss.item())
                 val_log["acc1"].update(acc_dict["acc1"].item())
@@ -213,17 +204,11 @@ def main(args, params):
 
                 pbar_tubes.set_postfix_str(f'loss={round(val_log["loss"].avg, 3)}, acc1: {round(val_log["acc1"].avg, 3)}, acc1_w/o: {round(val_log["acc1_wo_noaction"].avg, 3)}')
 
-                ## make new video with tube ##
-                continue
-                video_path = osp.join(params["dataset_path_video"], tube.video_name + ".avi")
-                make_video_with_tube(video_path, params["label_list"], tube.tubes, video_ano)
-                os.remove("test.avi")
-
         leave_ex(ex, "val", val_log, epoch)
 
         lr_scheduler_head.step()
 
-        utils.save_checkpoint(action_head, osp.join(args.check_dir, args.dataset), args.load_ex_name + "/head/" + args.write_ex_name, epoch)
+        utils.save_checkpoint(action_head, osp.join(args.check_dir, args.dataset), args.qmm_name + "/head/" + args.head_name, epoch)
 
 
 def leave_ex(ex, subset, log, epoch):
@@ -240,18 +225,6 @@ def random_idx_list(length):
     percentage = random.uniform(0.7, 1.0)
     idx_list = sorted(random.sample(lst, int(length * percentage)))
     return idx_list
-
-
-# @torch.no_grad()
-# def get_frame_features(backbone, video_name, frame_indices, videos_dataset):
-#     device = backbone[0].body.conv1.weight.device
-#     idx = videos_dataset.video_name_list.index(video_name)
-#     img_paths, _ = videos_dataset.__getitem__(idx)
-#     img_paths = [img_paths[frame_idx] for frame_idx in frame_indices]
-#     video_data = VideoData(img_paths, None)
-#     imgs = [video_data.transform(Image.open(img_path)) for img_path in img_paths]
-#     features = backbone(utils.nested_tensor_from_tensor_list(torch.stack(imgs, dim=0).to(device)))[0][0].tensors
-#     return features
 
 
 if __name__ == '__main__':

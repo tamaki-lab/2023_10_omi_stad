@@ -21,20 +21,22 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # setting #
-    parser.add_argument('--epochs', default=30, type=int)
+    parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--ex_name', default='test', type=str)
+    parser.add_argument('--qmm_name', default='test', type=str)
     # loader
     parser.add_argument('--shards_path', default='/mnt/HDD12TB-1/omi/detr/datasets/shards', type=str)
     parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--n_frames', default=8, type=int)
+    parser.add_argument('--sampling_rate', default=1, type=int)
+
     # person encoder
     parser.add_argument('--lr_en', default=1e-4, type=float)
     parser.add_argument('--weight_decay_en', default=1e-4, type=float)
     parser.add_argument('--lr_drop_en', default=10, type=int)
     parser.add_argument('--psn_score_th', default=0.75, type=float)
-    parser.add_argument('--iou_th', default=0.5, type=float)
+    parser.add_argument('--iou_th', default=0.2, type=float)
     parser.add_argument('--is_skip', action="store_true")
 
     # Fixed settings #
@@ -78,11 +80,12 @@ def main(args):
     lr_scheduler_en = torch.optim.lr_scheduler.StepLR(optimizer_en, args.lr_drop_en)
 
     shards_path = osp.join(args.shards_path, args.dataset)
-    data_loader_train = get_loader(shard_path=shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
+    data_loader_train = get_loader(shard_path=shards_path + "/train", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=args.sampling_rate, num_workers=args.num_workers)
     data_loader_val = get_loader(shard_path=shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
 
     if args.dataset == "ucf101-24":
-        pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
+        pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_10.pth"
+        # pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
         detr.load_state_dict(torch.load(pretrain_path))
     else:
         pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
@@ -101,9 +104,10 @@ def main(args):
         project_name="stal",
         workspace="kazukiomi",
     )
+    ex.add_tag("train qmm")
     hyper_params = {
         "dataset": args.dataset,
-        "ex_name": args.ex_name,
+        "ex_name": args.qmm_name,
         "batch_size": args.batch_size,
         "n_frames": args.n_frames,
         "learning late": args.lr_en,
@@ -114,11 +118,11 @@ def main(args):
     ex.log_parameters(hyper_params)
 
     ## log loss before training ##
-    evaluate(detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log)
-    leave_ex(ex, "train", train_log, 0)
+    # evaluate(detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log)
+    # leave_ex(ex, "train", train_log, 0)
 
-    evaluate(detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log)
-    leave_ex(ex, "val", val_log, 0)
+    # evaluate(detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log)
+    # leave_ex(ex, "val", val_log, 0)
 
     print("Start training")
 
@@ -138,7 +142,7 @@ def main(args):
         )
         leave_ex(ex, "val", val_log, epoch)
 
-        utils.save_checkpoint(psn_encoder, osp.join(args.check_dir, args.dataset), args.ex_name + "/encoder", epoch)
+        utils.save_checkpoint(psn_encoder, osp.join(args.check_dir, args.dataset), args.qmm_name + "/encoder", epoch)
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
@@ -315,7 +319,7 @@ def diff_detr_head(args):
     org_pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
     org_detr.load_state_dict(torch.load(org_pretrain_path)["model"])
     # pretrain_path = "checkpoint/ucf101-24/test/detr/epoch_50.pth"
-    pretrain_path = "checkpoint/ucf101-24/detr:headtune/detr/epoch_30.pth"
+    pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
     detr.load_state_dict(torch.load(pretrain_path))
 
     pbar_batch = tqdm(data_loader, total=len(data_loader), leave=False)

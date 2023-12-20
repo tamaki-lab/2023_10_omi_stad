@@ -41,15 +41,16 @@ def get_frame_features(backbone, video_name, frame_indices, videos_dataset, devi
     img_paths, _ = videos_dataset.__getitem__(idx)
     img_paths = [img_paths[frame_idx] for frame_idx in frame_indices]
 
-    # video_data = VideoData(img_paths, None, resize_size=(182, 182))
-    # imgs = [video_data.transform(Image.open(img_path), is_aug) for img_path in img_paths]
-    # clips = [torch.stack([img, img, img, img], dim=1) for img in imgs]
-    # clips = torch.stack(clips).to(device)
-    # features = backbone(clips)
-
-    video_data = VideoData(img_paths, None)
-    imgs = [video_data.transform(Image.open(img_path), is_aug) for img_path in img_paths]
-    features = backbone(utils.nested_tensor_from_tensor_list(torch.stack(imgs, dim=0).to(device)))[0][0].tensors
+    if "X3D_XS" in str(type(backbone)):
+        video_data = VideoData(img_paths, None, resize_size=(182, 182))
+        imgs = [video_data.transform(Image.open(img_path), is_aug) for img_path in img_paths]
+        clips = [torch.stack([img, img, img, img], dim=1) for img in imgs]
+        clips = torch.stack(clips).to(device)
+        features = backbone(clips)
+    elif "Joiner" in str(type(backbone)):
+        video_data = VideoData(img_paths, None)
+        imgs = torch.stack([video_data.transform(Image.open(img_path), is_aug) for img_path in img_paths]).to(device)
+        features = backbone(utils.nested_tensor_from_tensor_list(imgs))[0][0].tensors
 
     return features
 

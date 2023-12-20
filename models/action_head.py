@@ -20,7 +20,7 @@ class ActionHead(nn.Module):
             dim = in_d
         transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=dim, nhead=8, dim_feedforward=in_d)
         self.transformer_encoder = nn.TransformerEncoder(transformer_encoder_layer, num_layers=n_layers)
-        self.head = nn.Linear(dim, n_classes + 1)
+        self.head = nn.Linear(dim, n_classes)
 
     def forward(self, x, frame_indices=None):
         if self.use_pos_ecd:
@@ -97,7 +97,7 @@ class Extractor2(nn.Module):
 class ActionHead2(nn.Module):
     def __init__(self, in_d: int=256, n_layers: int=2, n_classes: int=24, pos_ecd: tuple=(True, "cat", 32)):
         super().__init__()
-        self.extractor = Extractor()  # (n,2048,32,32) -> (n,256)
+        self.extractor = Extractor()
         self.use_pos_ecd = pos_ecd[0]
         if pos_ecd[0]:
             if pos_ecd[1] == "cat":
@@ -110,15 +110,17 @@ class ActionHead2(nn.Module):
             dim = in_d
         decoder_layer = nn.TransformerDecoderLayer(d_model=dim, nhead=8, dim_feedforward=in_d)
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
-        self.head = nn.Linear(dim, n_classes + 1)
+        self.dropout = nn.Dropout(p=0.1)
+        self.head = nn.Linear(dim, n_classes)
 
     def forward(self, tgt, memory, frame_indices=None):
         tgt = self.extractor(tgt)
         if self.use_pos_ecd:
             tgt = self.pos_encoder(tgt, frame_indices)
             memory = self.pos_encoder(memory, frame_indices)
+        # x = self.transformer_decoder(memory, tgt)
         x = self.transformer_decoder(tgt, memory)
-        x = self.head(x)
+        x = self.head(self.dropout(x))
         return x
 
 class X3D_XS(nn.Module):

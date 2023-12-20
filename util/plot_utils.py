@@ -254,6 +254,75 @@ def make_video_with_tube(video_path, label_list, tubes, video_ano, plot_label=Tr
     new_container.close()
 
 
+def make_video_with_action_pred(video_path, tubes, label_list, video_ano, plot_label=True):
+    color_map = get_color_list()
+
+    container = av.open(str(video_path))
+    stream = container.streams.video[0]
+
+    width = stream.width
+    height = stream.height
+    # codec = stream.codec_context.name
+    codec = "mpeg4"
+    base_rate = stream.base_rate
+    pix_fmt = stream.pix_fmt
+
+    new_container = av.open("test.mp4", mode="w")
+    # new_container = av.open("test.avi", mode="w")
+    new_stream = new_container.add_stream(codec, rate=base_rate)
+    new_stream.width = width
+    new_stream.height = height
+    # new_stream.pix_fmt = pix_fmt
+    new_stream.pix_fmt = "yuv420p"
+
+    for frame_idx, frame in enumerate(container.decode(video=0)):
+        frame = frame.to_ndarray(format="rgb24")
+
+        for tube_idx, tube in enumerate(tubes.tubes):
+            frame_indicies = [x[0] for x in tube.query_indicies]
+            if frame_idx in frame_indicies:
+                idx = frame_indicies.index(frame_idx)
+                box = tube.bboxes[idx]
+                x1, y1, x2, y2 = box
+                x1 = int(max(min(x1, width), 0))
+                x2 = int(max(min(x2, width), 0))
+                y1 = int(max(min(y1, height), 0))
+                y2 = int(max(min(y2, height), 0))
+                action_id = tube.action_id[idx, 0].item()
+                score = tube.action_score[idx, 0].item()
+
+                cv2.rectangle(
+                    frame, pt1=(x1, y1), pt2=(x2, y2),
+                    color=color_map[tube_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                )
+                cv2.putText(
+                    frame, text=f"{label_list[action_id]}, {round(score,2)}, tube idx:{tube_idx}",
+                    org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                    color=color_map[tube_idx % 10], thickness=1, lineType=cv2.LINE_4
+                )
+
+        if (plot_label) and (frame_idx in video_ano):
+            for tube_idx, frame_ano in video_ano[frame_idx].items():
+                x1, y1, x2, y2 = frame_ano[:4]
+                action_id = frame_ano[4]
+                cv2.rectangle(
+                    frame, pt1=(x1, y1), pt2=(x2, y2),
+                    color=(0, 0, 0), thickness=2, lineType=cv2.LINE_4, shift=0,
+                )
+                cv2.putText(
+                    frame, text=f"{label_list[action_id]}", org=(x1+5, y1+10),
+                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                    color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
+                )
+        frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
+        for packet in new_stream.encode(frame):
+            new_container.mux(packet)
+
+    for packet in new_stream.encode():
+        new_container.mux(packet)
+    new_container.close()
+
+
 def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_label=True):
     # color_map = random_colors(100)
     color_map = get_color_list()
@@ -265,15 +334,18 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
     width = stream.width
     height = stream.height
     codec = stream.codec_context.name
+    # codec = "mpeg4"
     base_rate = stream.base_rate
     pix_fmt = stream.pix_fmt
     resize_scale = max([width, height]) / 512
 
     new_container = av.open("test.avi", mode="w")
+    # new_container = av.open("test.mp4", mode="w")
     new_stream = new_container.add_stream(codec, rate=base_rate)
     new_stream.width = width
     new_stream.height = height
     new_stream.pix_fmt = pix_fmt
+    # new_stream.pix_fmt = "yuv420p"
 
     for frame_idx, frame in enumerate(container.decode(video=0)):
         frame = frame.to_ndarray(format="rgb24")
