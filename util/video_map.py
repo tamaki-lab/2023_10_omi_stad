@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import torch
 
-from util.box_ops import tube_iou
+from util.box_ops import tube_iou, get_motion_ctg
 
 
 def voc_ap(pr, use_07_metric=False, num_complement=11):
@@ -107,7 +107,7 @@ def calc_video_map(
         pred_tubes: list[Tuple[str, Dict]],
         gt_tubes: Dict[str, list[Dict]],
         num_class: int,
-        tiou_thresh: float = 0.4,
+        tiou_thresh: float = 0.2,
         num_complement: int = 11) -> list[int]:
     """Calculate video mAP
 
@@ -149,3 +149,125 @@ def calc_video_map(
         video_ap.append(calc_video_ap(pred_tubes_class[class_idx], gt_tubes_class[class_idx], tiou_thresh, num_complement))
 
     return video_ap
+
+
+def calc_motion_ap(
+        pred_tubes: list[Tuple[str, Dict]],
+        gt_tubes: Dict[str, list[Dict]],
+        tiou_thresh: float = 0.2,
+        num_complement: int = 11) -> list[int]:
+    """Calculate video mAP
+
+    Args:
+        pred_tubes (list[Tuple[str, Dict]]):
+            [video_name,{class:class_idx,score:score,boxes:{frameidx:tensor(shape=4)}]
+            - list length is the num of predicted tubes
+            - list element is Tuple
+                - the first element is "video name"
+                - the secand element is Dict (keys are "class", "score" and "boxes")
+        gt_tubes (Dict[str, list[Dict]]):
+            {video_name:[{class:class_idx,boxes:{frameidx:tensor(shape=4)}}]}
+            - key is video_name, value is list
+                - list length is num of tubes in one video
+                - list element is dict(keys are "class" and "boxes")
+        num_class (int): Num of classes
+        tiou_thresh (float): Threshold of tIoU (extend IoU temporal)
+        num_complement (int): Num of points in precision-recall graph used in the calculation
+
+    Returns:
+        list[int]: motion ap list (@small, medium, large)
+    """
+
+    motion_ctgs = ["small", "medium", "large"]
+
+    pred_tubes_motion = [[] for _ in motion_ctgs]
+    gt_tubes_motion = [{} for _ in motion_ctgs]
+
+    for video_name, pred_tube in pred_tubes:
+        # ctg = "medium"
+        ctg = get_motion_ctg(pred_tube["boxes"])
+        ctg_index = motion_ctgs.index(ctg)
+        pred_tubes_motion[ctg_index].append((video_name, (pred_tube["class"], pred_tube["score"], pred_tube["boxes"])))
+
+    for video_name in gt_tubes.keys():
+        for motion_ctg in motion_ctgs:
+            ctg_index = motion_ctgs.index(motion_ctg)
+            gt_tubes_motion[ctg_index][video_name] = []
+    for video_name, video_tubes in gt_tubes.items():
+        for video_tube in video_tubes:
+            # ctg = "medium"
+            ctg = get_motion_ctg(video_tube["boxes"])
+            ctg_index = motion_ctgs.index(ctg)
+            gt_tubes_motion[ctg_index][video_name].append((video_tube["class"], video_tube["boxes"]))
+
+    # ap = calc_motion_one_ap(pred_tubes_motion[1], gt_tubes_motion[1], tiou_thresh, num_complement)
+    # print(ap)
+
+    for i, motion_ctg in enumerate(motion_ctgs):
+        ap = calc_motion_one_ap(pred_tubes_motion[i], gt_tubes_motion[i], tiou_thresh, num_complement)
+        print(f"{motion_ctg}: {round(ap, 4)}")
+
+
+def calc_motion_one_ap(
+        pred_tubes: list[Tuple[str, Tuple[float, Dict[str, torch.Tensor]]]],
+        gt_tubes: Dict[str, list[Dict[str, torch.Tensor]]],
+        tiou_thresh: float,
+        num_complement: int) -> float:
+    """Calculate video AP
+
+    Args:
+        pred_tubes (list[Tuple[str, Tuple[float, Dict[str, torch.Tensor]]]]):
+            - list length is num of predicted tubes
+            - list element is Tuple
+                - the first element is "video name"
+                - the secand element is Tuple ("class", "score", {frame_idx: bbox})
+            [(video_name, (score, {frame_idx:bbox}))]
+        gt_tubes (Dict[str, list[Dict[str, torch.Tensor]]]):
+            - key is video_name, value is list
+                - list length is num of tubes in one video
+                - list element is dict ({frame_idx: bbox})
+                    - dict length is len(tube) (=num of bbox)
+            video_name:[{frame_idx:[x1,y1,x2,y2]}]
+        tiou_thresh (float): Threshold of tIoU (extend IoU temporal)
+        num_complement (int): Num of points in precision-recall graph used in the calculation
+
+    Returns:
+        float: video_ap
+    """
+
+    if len(pred_tubes) == 0:
+        return 0
+
+    pred_tubes.sort(key=lambda x: x[1][1], reverse=True)
+
+    pr = np.empty((len(pred_tubes) + 1, 2), dtype=np.float32)
+    pr[0, 0] = 1.0
+    # pr[0, 0] = 0.0
+    pr[0, 1] = 0.0
+    tp = 0
+    fn = sum([len(tubes) for _, tubes in gt_tubes.items()])
+    fp = 0
+
+    for i, (video_name, pred_tube) in enumerate(pred_tubes):
+        video_gt_tubes = gt_tubes[video_name]
+        tiou_list = []
+        for tube_idx, gt_tube in enumerate(video_gt_tubes):
+            # tiou_list.append(tube_iou(pred_tube[1], gt_tube, label_centric=True))
+            tiou_list.append(tube_iou(pred_tube[2], gt_tube[1]))
+        if len(tiou_list) == 0:
+            fp += 1
+        else:
+            max_v = max(tiou_list)
+            max_idx = tiou_list.index(max_v)
+            if (max_v > tiou_thresh) and (video_gt_tubes[max_idx][0] == pred_tube[0]):
+                tp += 1  # TODO 既に正解したものに対して2回目以降に正解した場合の考慮
+                fn -= 1
+            else:
+                fp += 1
+        pr[i + 1, 0] = float(tp) / float(tp + fp)
+        pr[i + 1, 1] = float(tp) / float(tp + fn + 0.00001)
+
+    ap = voc_ap(pr, num_complement=num_complement)
+    print(f"tp:{tp}")
+
+    return ap

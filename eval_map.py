@@ -13,7 +13,7 @@ from models import build_model
 from models.person_encoder import PersonEncoder
 from models.action_head import ActionHead, ActionHead2, X3D_XS
 from util.gt_tubes import make_gt_tubes
-from util.video_map import calc_video_map
+from util.video_map import calc_video_map, calc_motion_ap
 from util.plot_utils import make_video_with_actiontube, make_video_with_action_pred
 from datasets.dataset import VideoDataset
 
@@ -136,10 +136,12 @@ def main(args, params):
     video_names = list(video_names)
     gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
 
-    video_ap = calc_video_map(pred_tubes, gt_tubes, params["num_classes"], args.tiou_th)
-    for class_name, ap in zip(params["label_list"][:-1], video_ap):
-        print(f"{class_name}: {round(ap,4)}")
-    print(f"v-mAP: {round(sum(video_ap) / len(video_ap),4)}")
+    # video_ap = calc_video_map(pred_tubes, gt_tubes, params["num_classes"], args.tiou_th)
+    # for class_name, ap in zip(params["label_list"][:-1], video_ap):
+    #     print(f"{class_name}: {round(ap,4)}")
+    # print(f"v-mAP: {round(sum(video_ap) / len(video_ap),4)}")
+
+    calc_motion_ap(pred_tubes, gt_tubes, args.tiou_th)
 
 
 if __name__ == "__main__":

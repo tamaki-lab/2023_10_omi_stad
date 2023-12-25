@@ -127,3 +127,27 @@ def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor], lab
     tube_iou /= len(frame_idx)
 
     return tube_iou
+
+
+def get_motion_ctg(boxes: dict[str, torch.Tensor]):
+    offsets = [4, 8, 16, 24, 36]
+    frame_indicies = list(boxes.keys())
+    start_idx = frame_indicies[0]
+    end_idx = frame_indicies[-1]
+    iou_offsets = []
+    for stride in offsets:
+        tgt_indicies = [x for x in frame_indicies if (x - start_idx) % stride == 0]
+        tgt_paris = [(tgt_indicies[i], tgt_indicies[i + 1]) for i in range(len(tgt_indicies) - 1) if tgt_indicies[i + 1] - tgt_indicies[i] == stride]
+        ious = [box_iou(boxes[a].reshape(-1, 4), boxes[b].reshape(-1, 4))[0] for a, b in tgt_paris]
+        if len(ious) != 0:
+            iou_offsets.append(sum(ious) / len(ious))
+        else:
+            iou_offsets.append(box_iou(boxes[start_idx].reshape(-1, 4), boxes[end_idx].reshape(-1, 4))[0]) # TODO 検出漏れのためない場合の考慮
+    mean_iou = sum(iou_offsets) / len(iou_offsets)
+    if mean_iou < 0.49:
+        ctg = "large"
+    elif mean_iou < 0.66:
+        ctg = "medium"
+    else:
+        ctg = "small"
+    return ctg

@@ -253,6 +253,56 @@ def calc_precision_recall_per_class(pred_tubes, gt_tubes, label_list, video_name
         print("-------")
 
 
+def calc_precision_recall_per_motion(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
+    pred_tubes = [(tube.video_name, tube.make_region_pred()) for tube in pred_tubes]
+
+    for video_name, tubes_ano in gt_tubes.copy().items():
+        gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
+
+    if video_names is None:
+        correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items()}
+    else:
+        gt_tubes = {name: tubes for name, tubes in gt_tubes.items() if name in video_names}
+        correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items() if name in video_names}
+
+    n_gt = sum([len(tubes) for _, tubes in gt_tubes.items()])
+    tp = 0
+    n_pred = 0
+
+    pbar_preds = tqdm(enumerate(pred_tubes), total=len(pred_tubes), leave=False)
+    pbar_preds.set_description("[Calc TP]")
+    for _, (video_name, pred_tube) in pbar_preds:
+        video_gt_tubes = gt_tubes[video_name]
+        tiou_list = []
+        for _, gt_tube in enumerate(video_gt_tubes):
+            # tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(True, 0.35)))
+            tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(False, 0.35)))
+        max_tiou = max(tiou_list)   # TODO gt bboxが1つも存在しない場合の考慮
+        max_index = tiou_list.index(max_tiou)
+        if max_tiou > tiou_th:
+            if correct_map[video_name][max_index]:
+                continue
+            else:
+                correct_map[video_name][max_index] = True
+                tp += 1
+                n_pred += 1
+        else:
+            n_pred += 1
+
+        pbar_preds.set_postfix_str(f'TP={tp}, Pre: {round(tp/n_pred, 3)}, Rec: {round(tp/n_gt, 3)}')
+
+    print("Settings")
+    print(f"psn_socore_th: {args.psn_score_th}")
+    print(f"sim_th: {args.sim_th}")
+    print(f"tiou_th: {args.tiou_th}")
+    print("-------")
+    print(f"n_gt_tubes: {n_gt}")
+    print(f"n_pred_tubes: {len(pred_tubes)}, n_pred_tubes (filter): {n_pred}")
+    print(f"True Positive: {tp}")
+    print("-------")
+    print(f"Precision: {round(tp/len(pred_tubes),3)}, Precision (filter): {round(tp/n_pred,3)}")
+    print(f"Recall: {round(tp/n_gt,3)}")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Tube evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
@@ -276,7 +326,8 @@ if __name__ == '__main__':
 
     if id == 0:  # calc precision and recall
         # calc_precision_recall(pred_tubes, gt_tubes, None, args.tiou_th)
-        calc_precision_recall_per_class(pred_tubes, gt_tubes, params["label_list"][:-1], None, args.tiou_th)
+        # calc_precision_recall_per_class(pred_tubes, gt_tubes, params["label_list"][:-1], None, args.tiou_th)
+        calc_precision_recall_per_motion(pred_tubes, gt_tubes, None, args.tiou_th)
     elif id == 1:  # visualization
         for tube in pred_tubes:
             video_name = tube.video_name
