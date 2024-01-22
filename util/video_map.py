@@ -76,7 +76,6 @@ def calc_video_ap(
 
     pr = np.empty((len(pred_tubes) + 1, 2), dtype=np.float32)
     pr[0, 0] = 1.0
-    # pr[0, 0] = 0.0
     pr[0, 1] = 0.0
     tp = 0
     fn = sum([len(tubes) for _, tubes in gt_tubes.items()])
@@ -204,8 +203,10 @@ def calc_motion_ap(
     # print(ap)
 
     for i, motion_ctg in enumerate(motion_ctgs):
+        print("--------------")
+        print(f"{motion_ctg}")
         ap = calc_motion_one_ap(pred_tubes_motion[i], gt_tubes_motion[i], tiou_thresh, num_complement)
-        print(f"{motion_ctg}: {round(ap, 4)}")
+        print("--------------")
 
 
 def calc_motion_one_ap(
@@ -268,6 +269,8 @@ def calc_motion_one_ap(
         pr[i + 1, 1] = float(tp) / float(tp + fn + 0.00001)
 
     ap = voc_ap(pr, num_complement=num_complement)
-    print(f"tp:{tp}")
+    print(f"GT:{sum([len(tubes) for _, tubes in gt_tubes.items()])}")
+    print(f"TP:{tp}")
+    print(f"AP:{round(ap, 4)}")
 
     return ap

@@ -84,8 +84,7 @@ def main(args):
     data_loader_val = get_loader(shard_path=shards_path + "/val", batch_size=args.batch_size, clip_frames=args.n_frames, sampling_rate=1, num_workers=args.num_workers)
 
     if args.dataset == "ucf101-24":
-        pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_10.pth"
-        # pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
+        pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
         detr.load_state_dict(torch.load(pretrain_path))
     else:
         pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
@@ -118,11 +117,11 @@ def main(args):
     ex.log_parameters(hyper_params)
 
     ## log loss before training ##
-    # evaluate(detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log)
-    # leave_ex(ex, "train", train_log, 0)
+    evaluate(detr, criterion, postprocessors, data_loader_train, device, psn_encoder, psn_criterion, train_log)
+    leave_ex(ex, "train", train_log, 0)
 
-    # evaluate(detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log)
-    # leave_ex(ex, "val", val_log, 0)
+    evaluate(detr, criterion, postprocessors, data_loader_val, device, psn_encoder, psn_criterion, val_log)
+    leave_ex(ex, "val", val_log, 0)
 
     print("Start training")
 

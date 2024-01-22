@@ -13,7 +13,7 @@ from datasets.dataset import get_video_loader, get_sequential_loader
 import util.misc as utils
 from util.plot_utils import make_video_with_tube
 from util.gt_tubes import make_gt_tubes
-from util.box_ops import tube_iou
+from util.box_ops import tube_iou, get_motion_ctg
 from models import build_model
 from models.person_encoder import PersonEncoder, NPairLoss
 from models.tube import ActionTubes
@@ -25,18 +25,19 @@ def get_args_parser():
     # setting #
     parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--qmm_name', default='w:152', type=str)
+    parser.add_argument('--qmm_name', default='noskip_sr:4', type=str)
     parser.add_argument('--link_cues', default='feature', type=str)
     # loader
     parser.add_argument('--n_frames', default=128, type=int)
     parser.add_argument('--subset', default="val", type=str, choices=["train", "val"])
     # person encoder
     parser.add_argument('--load_epoch', default=20, type=int)
-    parser.add_argument('--psn_score_th', default=0.9, type=float)
-    parser.add_argument('--sim_th', default=0.5, type=float)
+    parser.add_argument('--psn_score_th', default=0.9, type=float)  # jhmdb:0.9, ucf:0.5
+    parser.add_argument('--sim_th', default=0.5, type=float)  # jhmdb:0.5, ucf:0.25
     parser.add_argument('--tiou_th', default=0.2, type=float)
     parser.add_argument('--iou_th', default=0.2, type=float)    # for visualization
     parser.add_argument('--is_skip', action="store_true")
+    parser.add_argument('--filter_length', default=8, type=int)  # jhmdb:8, ucf:16
 
     # Fixed settings #
     # Backbone
@@ -116,7 +117,8 @@ def main(args, params):
                 frame_idx = args.n_frames * clip_idx + t
                 tube.update(d_queries, p_embed, frame_idx, psn_indices[t], psn_boxes[t], args.link_cues)
 
-        tube.filter()
+        tube.filter(filter_length=args.filter_length)
+        # tube.filter()
         pred_tubes.append(tube)
         tube.give_action_label(params["num_classes"], args.iou_th)
 
@@ -128,10 +130,10 @@ def main(args, params):
 
     if args.link_cues == "feature":
         dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes", args.subset)
-        filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+        filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}_fl:{args.filter_length}"
     elif args.link_cues == "iou":
         dir = osp.join(args.check_dir, args.dataset, "iou_link", "qmm_tubes", args.subset)
-        filename = f"iouth:{args.sim_th}"
+        filename = f"pth:{args.psn_score_th}_iouth:{args.sim_th}_fl:{args.filter_length}"
     utils.write_tar(pred_tubes, dir, "videotubes-" + filename)
     video_names = [tube.video_name for tube in pred_tubes]
     pred_tubes = [tube for video_tubes in pred_tubes for tube in video_tubes.tubes]
@@ -254,7 +256,18 @@ def calc_precision_recall_per_class(pred_tubes, gt_tubes, label_list, video_name
 
 
 def calc_precision_recall_per_motion(pred_tubes, gt_tubes, video_names=None, tiou_th=0.5):
+    print("Settings")
+    print(f"psn_socore_th: {args.psn_score_th}")
+    print(f"sim_th: {args.sim_th}")
+    print(f"tiou_th: {args.tiou_th}")
+    print("-----------------------")
+
+    motion_ctgs = ["small", "medium", "large"]
     pred_tubes = [(tube.video_name, tube.make_region_pred()) for tube in pred_tubes]
+    pred_tubes_per_motion = {ctg: [] for ctg in motion_ctgs}
+    for pred_tube in pred_tubes:
+        ctg = get_motion_ctg(pred_tube[1])
+        pred_tubes_per_motion[ctg].append(pred_tube)
 
     for video_name, tubes_ano in gt_tubes.copy().items():
         gt_tubes[video_name] = [tube_ano["boxes"] for tube_ano in tubes_ano]
@@ -265,43 +278,51 @@ def calc_precision_recall_per_motion(pred_tubes, gt_tubes, video_names=None, tio
         gt_tubes = {name: tubes for name, tubes in gt_tubes.items() if name in video_names}
         correct_map = {name: [False] * len(tube) for name, tube in gt_tubes.items() if name in video_names}
 
-    n_gt = sum([len(tubes) for _, tubes in gt_tubes.items()])
-    tp = 0
-    n_pred = 0
-
-    pbar_preds = tqdm(enumerate(pred_tubes), total=len(pred_tubes), leave=False)
-    pbar_preds.set_description("[Calc TP]")
-    for _, (video_name, pred_tube) in pbar_preds:
-        video_gt_tubes = gt_tubes[video_name]
-        tiou_list = []
-        for _, gt_tube in enumerate(video_gt_tubes):
-            # tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(True, 0.35)))
-            tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(False, 0.35)))
-        max_tiou = max(tiou_list)   # TODO gt bboxが1つも存在しない場合の考慮
-        max_index = tiou_list.index(max_tiou)
-        if max_tiou > tiou_th:
-            if correct_map[video_name][max_index]:
-                continue
+    gt_tubes_per_motion = {ctg: {} for ctg in motion_ctgs}
+    for name, tubes in gt_tubes.items():
+        for tube in tubes:
+            ctg = get_motion_ctg(tube)
+            if name not in gt_tubes_per_motion[ctg]:
+                gt_tubes_per_motion[ctg][name] = [tube]
             else:
-                correct_map[video_name][max_index] = True
-                tp += 1
+                gt_tubes_per_motion[ctg][name].append(tube)
+
+    for ctg in motion_ctgs:
+        n_gt = sum([len(tubes) for _, tubes in gt_tubes_per_motion[ctg].items()])
+        tp = 0
+        n_pred = 0
+
+        pbar_preds = tqdm(enumerate(pred_tubes_per_motion[ctg]), total=len(pred_tubes_per_motion[ctg]), leave=False)
+        pbar_preds.set_description(f"[Calc TP@{ctg}]")
+        for _, (video_name, pred_tube) in pbar_preds:
+            if video_name not in gt_tubes_per_motion[ctg]:
                 n_pred += 1
-        else:
-            n_pred += 1
+                continue
+            video_gt_tubes = gt_tubes_per_motion[ctg][video_name]
+            tiou_list = []
+            for _, gt_tube in enumerate(video_gt_tubes):
+                # tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(True, 0.35)))
+                tiou_list.append(tube_iou(pred_tube, gt_tube, label_centric=True, frame_iou_set=(False, 0.35)))
+            max_tiou = max(tiou_list)
+            max_index = tiou_list.index(max_tiou)
+            if max_tiou > tiou_th:
+                if correct_map[video_name][max_index]:
+                    continue
+                else:
+                    correct_map[video_name][max_index] = True
+                    tp += 1
+                    n_pred += 1
+            else:
+                n_pred += 1
 
-        pbar_preds.set_postfix_str(f'TP={tp}, Pre: {round(tp/n_pred, 3)}, Rec: {round(tp/n_gt, 3)}')
-
-    print("Settings")
-    print(f"psn_socore_th: {args.psn_score_th}")
-    print(f"sim_th: {args.sim_th}")
-    print(f"tiou_th: {args.tiou_th}")
-    print("-------")
-    print(f"n_gt_tubes: {n_gt}")
-    print(f"n_pred_tubes: {len(pred_tubes)}, n_pred_tubes (filter): {n_pred}")
-    print(f"True Positive: {tp}")
-    print("-------")
-    print(f"Precision: {round(tp/len(pred_tubes),3)}, Precision (filter): {round(tp/n_pred,3)}")
-    print(f"Recall: {round(tp/n_gt,3)}")
+        print("-------")
+        print(ctg)
+        print(f"n_gt_tubes: {n_gt}")
+        print(f"n_pred_tubes: {len(pred_tubes_per_motion[ctg])}, n_pred_tubes (filter): {n_pred}")
+        print(f"True Positive: {tp}")
+        print(f"Precision: {round(tp/len(pred_tubes_per_motion[ctg]),3)}, Precision (filter): {round(tp/n_pred,3)}")
+        print(f"Recall: {round(tp/n_gt,3)}")
+        print("-------")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Tube evaluation script', parents=[get_args_parser()])
@@ -317,11 +338,12 @@ if __name__ == '__main__':
     name = ["tube-", "videotubes-"][id]
     if args.link_cues == "feature":
         dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes", args.subset)
-        filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+        filename = f"epoch:{args.load_epoch}_pth:{args.psn_score_th}_simth:{args.sim_th}_fl:{args.filter_length}"
     elif args.link_cues == "iou":
         dir = osp.join(args.check_dir, args.dataset, "iou_link", "qmm_tubes", args.subset)
-        filename = f"iouth:{args.sim_th}"
+        filename = f"pth:{args.psn_score_th}_iouth:{args.sim_th}_fl:{args.filter_length}"
     pred_tubes = [obj for obj in tqdm(utils.TarIterator(dir, name + filename))]
+
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
 
     if id == 0:  # calc precision and recall

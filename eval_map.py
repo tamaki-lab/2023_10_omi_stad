@@ -21,20 +21,26 @@ from datasets.dataset import VideoDataset
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
+    # metric
+    parser.add_argument('--metric', default='v-mAP', type=str, choices=['v-mAP', 'motion-AP'])
+
     # loader
     parser.add_argument('--dataset', default='jhmdb21', type=str, choices=['ucf101-24', 'jhmdb21'])
     parser.add_argument('--n_frames', default=128, type=int)
     parser.add_argument('--subset', default="val", type=str, choices=["train", "val"])
+    parser.add_argument('--link_cues', default='feature', type=str)
 
     # setting
-    parser.add_argument('--qmm_name', default='jhmdb_wd:e4', type=str)
-    parser.add_argument('--head_name', default='head_test', type=str)
-    parser.add_argument('--device', default=1, type=int)
-    parser.add_argument('--load_epoch_encoder', default=15, type=int)
+    parser.add_argument('--qmm_name', default='noskip_sr:4', type=str)
+    parser.add_argument('--head_type', default='vanilla', type=str, choices=["vanilla", "time_ecd:add", "time_ecd:cat", "x3d"])
+    parser.add_argument('--head_name', default='vanilla', type=str)
+    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--load_epoch_qmm', default=20, type=int)
     parser.add_argument('--load_epoch_head', default=20, type=int)
-    parser.add_argument('--psn_score_th', default=0.8, type=float)
+    parser.add_argument('--psn_score_th', default=0.9, type=float)
     parser.add_argument('--sim_th', default=0.5, type=float)
     parser.add_argument('--tiou_th', default=0.2, type=float)
+    parser.add_argument('--filter_length', default=8, type=int)
     # parser.add_argument('--iou_th', default=0.3, type=float)
     parser.add_argument('--topk', default=1, type=int)
 
@@ -72,19 +78,29 @@ def main(args, params):
 
     psn_encoder = PersonEncoder().to(device)
     psn_encoder.eval()
-    pretrain_path_encoder = osp.join(args.check_dir, args.dataset, args.qmm_name, "encoder", f"epoch_{args.load_epoch_encoder}.pth")
+    pretrain_path_encoder = osp.join(args.check_dir, args.dataset, args.qmm_name, "encoder", f"epoch_{args.load_epoch_qmm}.pth")
     psn_encoder.load_state_dict(torch.load(pretrain_path_encoder))
 
-    # action_head = ActionHead(n_classes=args.n_classes).to(device)
-    action_head = ActionHead2(n_classes=args.n_classes).to(device)
+    if args.head_type == "vanilla":
+        action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(False, "", None)).to(device)
+    elif args.head_type == "time_ecd:add":
+        action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(True, "add", None)).to(device)
+    elif args.head_type == "time_ecd:cat":
+        action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(True, "cat", 32)).to(device)
+    elif args.head_type == "x3d":
+        action_head = ActionHead2(n_classes=args.n_classes, pos_ecd=(True, "cat", 32)).to(device)
     action_head.eval()
-    pretrain_path_head = osp.join(args.check_dir, args.dataset, args.qmm_name, "head", args.head_name, f"epoch_{args.load_epoch_head}.pth")
+
+    if args.link_cues == "feature":
+        pretrain_path_head = osp.join(args.check_dir, args.dataset, args.qmm_name, "head", args.head_name, f"epoch_{args.load_epoch_head}.pth")
+    else:
+        pretrain_path_head = osp.join(args.check_dir, args.dataset, "iou_link", "head", args.head_name, f"epoch_{args.load_epoch_head}.pth")
     action_head.load_state_dict(torch.load(pretrain_path_head))
 
     loader = get_video_loader(args.dataset, args.subset, shuffle=False)
     dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes")
-    filename = f"videotubes-epoch:{args.load_epoch_encoder}_pth:{args.psn_score_th}_simth:{args.sim_th}"
-    # filename = f"tube-epoch:{args.load_epoch_encoder}_pth:{args.psn_score_th}_simth:{args.sim_th}"
+    filename = f"videotubes-epoch:{args.load_epoch_qmm}_pth:{args.psn_score_th}_simth:{args.sim_th}_fl:{args.filter_length}"
+    # filename = f"tube-epoch:{args.load_epoch_qmm}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     loader = utils.TarIterator(dir + "/" + args.subset, filename)
 
     val_dataset = VideoDataset(args.dataset, args.subset)
@@ -97,24 +113,23 @@ def main(args, params):
     pbar_tubes = tqdm(enumerate(loader), total=len(loader), leave=False)
     pbar_vtubes = tqdm(enumerate(loader), total=len(loader), leave=False)
     pbar_tubes.set_description("[Validation]")
-    # for tube_idx, tube in pbar_tubes:
     for video_idx, tubes in pbar_vtubes:
         pred_v_tubes = []
-        video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
 
         for tube in tubes.tubes:
-            # action_label = torch.Tensor(tube.action_label).to(torch.int64).to(device)
             video_names.add(tube.video_name)
             decoded_queries = torch.stack(tube.decoded_queries).to(device)
             frame_indices = [x[0] for x in tube.query_indicies]
             frame_indices = [x - frame_indices[0] for x in frame_indices]
 
-            frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device)
-            # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset, device)
-
-            # outputs = action_head(decoded_queries)
-            # outputs = action_head(decoded_queries, frame_indices)
-            outputs = action_head(frame_features, decoded_queries, frame_indices)
+            if args.head_type == "vanilla" or args.head_type == "time_ecd:add":
+                outputs = action_head(decoded_queries)
+            elif args.head_type == "time_ecd:cat":
+                outputs = action_head(decoded_queries, frame_indices)
+            elif args.head_type == "x3d":
+                frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device, True)
+                # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, device, True)
+                outputs = action_head(frame_features, decoded_queries, frame_indices)
 
             tube.log_pred(outputs, args.topk)
 
@@ -122,26 +137,29 @@ def main(args, params):
             pred_v_tubes.extend(action_tubes)
         pred_tubes.extend(pred_v_tubes)
 
+        # video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
         # make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano)
         # make_video_with_actiontube(video_path, params["label_list"], pred_v_tubes, tubes.ano, plot_label=True)
 
     print(f"num of pred tubes: {len(pred_tubes)}")
     pred_tubes = [tube for tube in pred_tubes if tube[1]["class"] != params["num_classes"]]
     print(f"num of pred tubes w/o no action: {len(pred_tubes)}")
-    # pred_tubes = [tube for tube in pred_tubes if len(tube[1]["boxes"]) > 16]
-    # print(f"num of pred tubes (after filtering): {len(pred_tubes)}")
 
+    pred_tubes = [tube for tube in pred_tubes if len(tube[1]["boxes"]) > 8]
+    print(f"num of pred tubes (after filtering): {len(pred_tubes)}")
 
     gt_tubes = make_gt_tubes(args.dataset, args.subset, params)
     video_names = list(video_names)
-    gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
+    gt_tubes = {name: tube for name, tube in gt_tubes.items()}
+    # gt_tubes = {name: tube for name, tube in gt_tubes.items() if name in video_names}   # for debug with less data from loader
 
-    # video_ap = calc_video_map(pred_tubes, gt_tubes, params["num_classes"], args.tiou_th)
-    # for class_name, ap in zip(params["label_list"][:-1], video_ap):
-    #     print(f"{class_name}: {round(ap,4)}")
-    # print(f"v-mAP: {round(sum(video_ap) / len(video_ap),4)}")
-
-    calc_motion_ap(pred_tubes, gt_tubes, args.tiou_th)
+    if args.metric == "v-mAP":
+        video_ap = calc_video_map(pred_tubes, gt_tubes, params["num_classes"], args.tiou_th)
+        for class_name, ap in zip(params["label_list"][:-1], video_ap):
+            print(f"{class_name}: {round(ap,4)}")
+        print(f"v-mAP: {round(sum(video_ap) / len(video_ap),4)}")
+    elif args.metric == "motion-AP":
+        calc_motion_ap(pred_tubes, gt_tubes, args.tiou_th)
 
 
 if __name__ == "__main__":

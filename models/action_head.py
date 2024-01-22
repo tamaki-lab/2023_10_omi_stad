@@ -36,8 +36,8 @@ class PositionalEncoding(nn.Module):
     Changed to assume online (batch size=1) instead of batch
     """
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 2500.0):
-    # def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 10000.0):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 800.0):  # UCF101-24
+    # def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 100):  # JHMDB
         super().__init__()
         self.ecd_type = ecd_type
 
@@ -80,18 +80,18 @@ class Extractor(nn.Module):
         return x
 
 
-class Extractor2(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv = nn.Conv2d(2048, )
-        self.dropout = nn.Dropout(p=0.1)
-        self.mlp = nn.Linear(2048, 256)
+# class Extractor2(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         self.conv = nn.Conv2d(2048, )
+#         self.dropout = nn.Dropout(p=0.1)
+#         self.mlp = nn.Linear(2048, 256)
 
-    def forward(self, x):
-        x = self.avgpool(x)
-        x = x.reshape(-1, 2048)
-        x = self.mlp(self.dropout(x))
-        return x
+#     def forward(self, x):
+#         x = self.avgpool(x)
+#         x = x.reshape(-1, 2048)
+#         x = self.mlp(self.dropout(x))
+#         return x
 
 
 class ActionHead2(nn.Module):
