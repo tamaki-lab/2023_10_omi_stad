@@ -279,6 +279,8 @@ def make_video_with_action_pred(video_path, tubes, label_list, video_ano, plot_l
         frame = frame.to_ndarray(format="rgb24")
 
         for tube_idx, tube in enumerate(tubes.tubes):
+            if tube_idx != 0:
+                continue
             frame_indicies = [x[0] for x in tube.query_indicies]
             if frame_idx in frame_indicies:
                 idx = frame_indicies.index(frame_idx)
@@ -293,8 +295,12 @@ def make_video_with_action_pred(video_path, tubes, label_list, video_ano, plot_l
 
                 cv2.rectangle(
                     frame, pt1=(x1, y1), pt2=(x2, y2),
-                    color=color_map[tube_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                    color=color_map[action_id % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
+                # cv2.rectangle(
+                #     frame, pt1=(x1, y1), pt2=(x2, y2),
+                #     color=color_map[tube_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                # )
                 cv2.putText(
                     frame, text=f"{label_list[action_id]}, {round(score,2)}, tube idx:{tube_idx}",
                     org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,

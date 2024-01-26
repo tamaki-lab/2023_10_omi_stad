@@ -156,7 +156,7 @@ def main(args, params):
         pred_tubes.extend(pred_v_tubes)
 
         video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
-        make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano, False)
+        make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano, True)
         make_video_with_actiontube(video_path, params["label_list"], pred_v_tubes, tubes.ano, plot_label=True)
         continue
 
