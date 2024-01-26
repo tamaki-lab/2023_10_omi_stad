@@ -42,7 +42,7 @@ def get_args_parser():
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
 
     # action head
-    parser.add_argument('--head_type', default='vanilla', type=str, choices=["vanilla", "time_ecd:add", "time_ecd:cat", "x3d"])
+    parser.add_argument('--head_type', default='vanilla', type=str, choices=["vanilla", "time_ecd:add", "time_ecd:cat", "res", "x3d"])
     parser.add_argument('--lr_head', default=1e-3, type=float)
     parser.add_argument('--weight_decay_head', default=1e-4, type=float)
     parser.add_argument('--lr_drop_head', default=15, type=int)
@@ -74,7 +74,7 @@ def main(args, params):
         action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(True, "add", None)).to(device)
     elif args.head_type == "time_ecd:cat":
         action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(True, "cat", 32)).to(device)
-    elif args.head_type == "x3d":
+    else:
         action_head = ActionHead2(n_classes=args.n_classes, pos_ecd=(True, "cat", 32)).to(device)
 
     if args.dataset == "ucf101-24":
@@ -144,9 +144,11 @@ def main(args, params):
                 outputs = action_head(decoded_queries)
             elif args.head_type == "time_ecd:cat":
                 outputs = action_head(decoded_queries, frame_indices)
-            elif args.head_type == "x3d":
-                frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, train_dataset, device, True)
-                # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, device, True)
+            else:
+                if args.head_type == "res":
+                    frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, device, True)
+                elif args.head_type == "x3d":
+                    frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, train_dataset, device, True)
                 outputs = action_head(frame_features, decoded_queries, frame_indices)
 
             tube.log_pred(outputs)
@@ -191,9 +193,11 @@ def main(args, params):
                     outputs = action_head(decoded_queries)
                 elif args.head_type == "time_ecd:cat":
                     outputs = action_head(decoded_queries, frame_indices)
-                elif args.head_type == "x3d":
-                    frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device, True)
-                    # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset, device, True)
+                else:
+                    if args.head_type == "res":
+                        frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, val_dataset, device, True)
+                    elif args.head_type == "x3d":
+                        frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device, True)
                     outputs = action_head(frame_features, decoded_queries, frame_indices)
 
                 tube.log_pred(outputs)

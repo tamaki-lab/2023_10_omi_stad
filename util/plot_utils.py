@@ -339,7 +339,7 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
     pix_fmt = stream.pix_fmt
     resize_scale = max([width, height]) / 512
 
-    new_container = av.open("test.avi", mode="w")
+    new_container = av.open("test_0.mp4", mode="w")
     # new_container = av.open("test.mp4", mode="w")
     new_stream = new_container.add_stream(codec, rate=base_rate)
     new_stream.width = width

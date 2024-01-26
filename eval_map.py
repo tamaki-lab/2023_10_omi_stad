@@ -32,7 +32,7 @@ def get_args_parser():
 
     # setting
     parser.add_argument('--qmm_name', default='noskip_sr:4', type=str)
-    parser.add_argument('--head_type', default='vanilla', type=str, choices=["vanilla", "time_ecd:add", "time_ecd:cat", "x3d"])
+    parser.add_argument('--head_type', default='vanilla', type=str, choices=["vanilla", "time_ecd:add", "time_ecd:cat", "res", "x3d"])
     parser.add_argument('--head_name', default='vanilla', type=str)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--load_epoch_qmm', default=20, type=int)
@@ -87,7 +87,7 @@ def main(args, params):
         action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(True, "add", None)).to(device)
     elif args.head_type == "time_ecd:cat":
         action_head = ActionHead(n_classes=args.n_classes, pos_ecd=(True, "cat", 32)).to(device)
-    elif args.head_type == "x3d":
+    else:
         action_head = ActionHead2(n_classes=args.n_classes, pos_ecd=(True, "cat", 32)).to(device)
     action_head.eval()
 
@@ -100,10 +100,9 @@ def main(args, params):
     loader = get_video_loader(args.dataset, args.subset, shuffle=False)
     dir = osp.join(args.check_dir, args.dataset, args.qmm_name, "qmm_tubes")
     filename = f"videotubes-epoch:{args.load_epoch_qmm}_pth:{args.psn_score_th}_simth:{args.sim_th}_fl:{args.filter_length}"
-    # filename = f"tube-epoch:{args.load_epoch_qmm}_pth:{args.psn_score_th}_simth:{args.sim_th}"
     loader = utils.TarIterator(dir + "/" + args.subset, filename)
 
-    val_dataset = VideoDataset(args.dataset, args.subset)
+    dataset = VideoDataset(args.dataset, args.subset)
     x3d_xs = X3D_XS().to(device)
     x3d_xs.eval()
 
@@ -116,6 +115,23 @@ def main(args, params):
     for video_idx, tubes in pbar_vtubes:
         pred_v_tubes = []
 
+        v_list = ["v_Basketball_g01_c02",
+                  "v_Basketball_g01_c04",
+                  "v_Basketball_g01_c05",
+                  "v_Basketball_g01_c06",
+                  "v_Basketball_g01_c07",
+                  "v_Basketball_g02_c06",
+                  "v_Basketball_g03_c01",
+                  "v_Basketball_g03_c05",
+                  "v_Basketball_g04_c01",
+                  "v_Basketball_g04_c02",
+                  "v_Basketball_g04_c03",
+                  "v_Basketball_g05_c03",
+                  "v_Basketball_g07_c01"]
+        v_list = ["v_Basketball_g07_c01"]
+        if tubes.video_name.split("/")[1] not in v_list:
+            continue
+
         for tube in tubes.tubes:
             video_names.add(tube.video_name)
             decoded_queries = torch.stack(tube.decoded_queries).to(device)
@@ -126,9 +142,11 @@ def main(args, params):
                 outputs = action_head(decoded_queries)
             elif args.head_type == "time_ecd:cat":
                 outputs = action_head(decoded_queries, frame_indices)
-            elif args.head_type == "x3d":
-                frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, val_dataset, device, True)
-                # frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, train_dataset, device, True)
+            else:
+                if args.head_type == "res":
+                    frame_features = utils.get_frame_features(detr.backbone, tube.video_name, frame_indices, dataset, device, True)
+                elif args.head_type == "x3d":
+                    frame_features = utils.get_frame_features(x3d_xs, tube.video_name, frame_indices, dataset, device, True)
                 outputs = action_head(frame_features, decoded_queries, frame_indices)
 
             tube.log_pred(outputs, args.topk)
@@ -137,9 +155,10 @@ def main(args, params):
             pred_v_tubes.extend(action_tubes)
         pred_tubes.extend(pred_v_tubes)
 
-        # video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
-        # make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano)
-        # make_video_with_actiontube(video_path, params["label_list"], pred_v_tubes, tubes.ano, plot_label=True)
+        video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
+        make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano, False)
+        make_video_with_actiontube(video_path, params["label_list"], pred_v_tubes, tubes.ano, plot_label=True)
+        continue
 
     print(f"num of pred tubes: {len(pred_tubes)}")
     pred_tubes = [tube for tube in pred_tubes if tube[1]["class"] != params["num_classes"]]

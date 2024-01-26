@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import torchinfo
+from transformers import VivitConfig, VivitModel, VivitForVideoClassification
+import numpy as np
 
 
 class ActionHead(nn.Module):
@@ -36,8 +38,8 @@ class PositionalEncoding(nn.Module):
     Changed to assume online (batch size=1) instead of batch
     """
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 800.0):  # UCF101-24
     # def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 100):  # JHMDB
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 800.0):  # UCF101-24
         super().__init__()
         self.ecd_type = ecd_type
 
@@ -118,8 +120,8 @@ class ActionHead2(nn.Module):
         if self.use_pos_ecd:
             tgt = self.pos_encoder(tgt, frame_indices)
             memory = self.pos_encoder(memory, frame_indices)
+        x = self.transformer_decoder(tgt, memory)  # default ((query), (key,value))
         # x = self.transformer_decoder(memory, tgt)
-        x = self.transformer_decoder(tgt, memory)
         x = self.head(self.dropout(x))
         return x
 
@@ -142,19 +144,26 @@ class X3D_XS(nn.Module):
 if __name__ == "__main__":
     model = X3D_XS()
     # model = torch.hub.load('facebookresearch/pytorchvideo', "x3d_xs", pretrained=True)
-
-    # head = ActionHead2()
-    # input = torch.rand([2, 3, 4, 182, 182])
-    # print(model(input).shape)
+    # model = VivitForVideoClassification.from_pretrained("google/vivit-b-16x2-kinetics400")
+    # model = VivitForVideoClassification.from_pretrained("google/vivit-b-16x2-kinetics400").vivit
+    # print(model)
     # exit()
 
     torchinfo.summary(
         model=model,
-        # model=head,
-        # input_size=((10, 2048, 32, 32), (10, 256)),
-        # input_size=((10, 256+32), (16, 256)),
-        input_size=(2, 3, 4, 182, 182),
+        # input_size=(1, 32, 3, 224, 224),  # ViViT
+        input_size=(1, 3, 4, 182, 182),  # x3d-xs
         depth=3,
         col_names=["input_size",
                    "output_size"],
         row_settings=("var_names",))
+
+    # for param in model.parameters():
+    #     param.requires_grad = True
+
+    # parameters = filter(lambda p: p.requires_grad, model.parameters())
+    # parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
+    # print('Trainable Parameters: %.3fM' % parameters)
+
+    # print(model)
+    # print(sum(p.numel() for p in model.parameters() if p.requires_grad))
