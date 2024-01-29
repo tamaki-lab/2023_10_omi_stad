@@ -59,13 +59,14 @@ def generalized_box_iou(boxes1, boxes2):
     assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
     iou, union = box_iou(boxes1, boxes2)
 
-    lt = torch.min(boxes1[:, None, :2], boxes2[:, :2])
-    rb = torch.max(boxes1[:, None, 2:], boxes2[:, 2:])
+    return iou
+    # lt = torch.min(boxes1[:, None, :2], boxes2[:, :2])
+    # rb = torch.max(boxes1[:, None, 2:], boxes2[:, 2:])
 
-    wh = (rb - lt).clamp(min=0)  # [N,M,2]
-    area = wh[:, :, 0] * wh[:, :, 1]
+    # wh = (rb - lt).clamp(min=0)  # [N,M,2]
+    # area = wh[:, :, 0] * wh[:, :, 1]
 
-    return iou - (area - union) / area
+    # return iou - (area - union) / area
 
 
 def masks_to_boxes(masks):
@@ -95,12 +96,13 @@ def masks_to_boxes(masks):
     return torch.stack([x_min, y_min, x_max, y_max], 1)
 
 
-def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor]) -> int:
+def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor], label_centric: bool = False, frame_iou_set: Tuple = (False, 0.5)) -> int:
     """Calculate tIoU (iou3d)
 
     Args:
         tube1 (Dict[str, torch.Tensor]): The key is the frame index of the tube, the value is bbox ([x1,y1,x2,y2])
         tube2 (Dict[str, torch.Tensor]):
+        label_centric (bool): If True, calculate iou on labeled frames (tube2) only
 
     Returns:
         int: tIoU
@@ -108,14 +110,44 @@ def tube_iou(tube1: Dict[str, torch.Tensor], tube2: Dict[str, torch.Tensor]) -> 
     tube_iou = 0
     tube1_frame_idx = list(tube1.keys())
     tube2_frame_idx = list(tube2.keys())
-    frame_idx = tube1_frame_idx + tube2_frame_idx
-    frame_idx = set(frame_idx)
+    if label_centric:
+        frame_idx = tube2_frame_idx
+    else:
+        frame_idx = tube1_frame_idx + tube2_frame_idx
+        frame_idx = set(frame_idx)
+
     for i in frame_idx:
         if i in tube1 and i in tube2:
             frame_iou, _ = box_iou(tube1[i].reshape(-1, 4), tube2[i].reshape(-1, 4))
+            if frame_iou_set[0] and frame_iou > frame_iou_set[1]:
+                frame_iou = 1
         else:
             frame_iou = 0
         tube_iou += frame_iou
     tube_iou /= len(frame_idx)
 
     return tube_iou
+
+
+def get_motion_ctg(boxes: dict[str, torch.Tensor]):
+    offsets = [4, 8, 16, 24, 36]
+    frame_indicies = list(boxes.keys())
+    start_idx = frame_indicies[0]
+    end_idx = frame_indicies[-1]
+    iou_offsets = []
+    for stride in offsets:
+        tgt_indicies = [x for x in frame_indicies if (x - start_idx) % stride == 0]
+        tgt_paris = [(tgt_indicies[i], tgt_indicies[i + 1]) for i in range(len(tgt_indicies) - 1) if tgt_indicies[i + 1] - tgt_indicies[i] == stride]
+        ious = [box_iou(boxes[a].reshape(-1, 4), boxes[b].reshape(-1, 4))[0] for a, b in tgt_paris]
+        if len(ious) != 0:
+            iou_offsets.append(sum(ious) / len(ious))
+        else:
+            iou_offsets.append(box_iou(boxes[start_idx].reshape(-1, 4), boxes[end_idx].reshape(-1, 4))[0]) # TODO 検出漏れのためない場合の考慮
+    mean_iou = sum(iou_offsets) / len(iou_offsets)
+    if mean_iou < 0.49:
+        ctg = "large"
+    elif mean_iou < 0.66:
+        ctg = "medium"
+    else:
+        ctg = "small"
+    return ctg

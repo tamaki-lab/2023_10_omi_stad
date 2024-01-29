@@ -13,12 +13,18 @@ import datetime
 import pickle
 from packaging import version
 from typing import Optional, List
+from tqdm import tqdm
 
 import torch
 import torch.distributed as dist
 from torch import Tensor
 import copy
+import tarfile
+import pickle
+import random
+from PIL import Image
 
+from datasets.dataset import VideoData
 import util.misc as utils
 from util.box_ops import generalized_box_iou
 
@@ -27,6 +33,68 @@ import torchvision
 if version.parse(torchvision.__version__) < version.parse('0.7'):
     from torchvision.ops import _new_empty_tensor
     from torchvision.ops.misc import _output_size
+
+
+@torch.no_grad()
+def get_frame_features(backbone, video_name, frame_indices, videos_dataset, device, is_aug=False):
+    idx = videos_dataset.video_name_list.index(video_name)
+    img_paths, _ = videos_dataset.__getitem__(idx)
+    img_paths = [img_paths[frame_idx] for frame_idx in frame_indices]
+
+    if "X3D_XS" in str(type(backbone)):
+        video_data = VideoData(img_paths, None, resize_size=(182, 182))
+        imgs = [video_data.transform(Image.open(img_path), is_aug) for img_path in img_paths]
+        clips = [torch.stack([img, img, img, img], dim=1) for img in imgs]
+        clips = torch.stack(clips).to(device)
+        features = backbone(clips)
+    elif "Joiner" in str(type(backbone)):
+        video_data = VideoData(img_paths, None)
+        imgs = torch.stack([video_data.transform(Image.open(img_path), is_aug) for img_path in img_paths]).to(device)
+        features = backbone(utils.nested_tensor_from_tensor_list(imgs))[0][0].tensors
+
+    return features
+
+
+def write_tar(object: list, dir: str, file_name: str = "test"):
+    os.makedirs(dir, exist_ok=True)
+    file_path = osp.join(dir, file_name)
+
+    with tarfile.open(file_path + '.tar', 'w') as tar:
+        pbar = tqdm(enumerate(object))
+        pbar.set_description("[Write tar file]")
+        for i, element in pbar:
+            with open(f'element{i}.pkl', 'wb') as f:
+                pickle.dump(element, f)
+            tar.add(f'element{i}.pkl')
+            os.remove(f'element{i}.pkl')
+
+    # for i in range(len(object)):
+    #     os.remove(f'element{i}.pkl')
+
+
+class TarIterator:
+    def __init__(self, dir, file_name):
+        self.file_path = osp.join(dir, file_name) + ".tar"
+        self.tar = tarfile.open(self.file_path, "r")
+        self.members = self.tar.getmembers()
+        self.index = 0
+
+    def __iter__(self):
+        self.index = 0
+        random.shuffle(self.members)
+        return self
+
+    def __len__(self):
+        return len(self.members)
+
+    def __next__(self):
+        if self.index >= len(self.members):
+            raise StopIteration
+        member = self.members[self.index]
+        f = self.tar.extractfile(member)
+        element = pickle.load(f)
+        self.index += 1
+        return element
 
 
 def get_pretrain_path(model_name, dilation):
@@ -71,59 +139,21 @@ def fix_ano_scale(video_ano, resize_scale=512 / 320):
     return video_ano_fixed
 
 
-def give_label(video_ano, tubes, no_action_id=-1, iou_th=0.4):
-    for tube in tubes:
-        tube["action_label"] = []
-        for i, (frame_idx, _) in enumerate(tube["idx_of_p_queries"]):
-            if frame_idx in video_ano:
-                gt_ano = [ano for tube_idx, ano in video_ano[frame_idx].items()]
-                gt_boxes = torch.tensor(gt_ano)[:, :4]
-                iou = generalized_box_iou(tube["bbox"][i].reshape(-1, 4), gt_boxes)
-                max_v, max_idx = torch.max(iou, dim=1)
-                if max_v.item() > iou_th:
-                    tube["action_label"].append(gt_ano[max_idx][4])
-                else:
-                    tube["action_label"].append(no_action_id)
-                continue
-            else:
-                tube["action_label"].append(no_action_id)
+def calc_acc(output, label, n_classes):
+    acc_dict = {}
+    label = label.to(output.device)
 
-
-def give_pred(tube, outputs):
-    # tube["action_pred"] = outputs.cpu().detach()
-    tube["action_pred"] = outputs.softmax(dim=1).cpu().detach()
-    tube["action_score"] = tube["action_pred"].topk(1, 1)[0].reshape(-1)
-    tube["action_id"] = tube["action_pred"].topk(1, 1)[1].reshape(-1)
-
-
-def calc_acc(tubes, n_classes):
-    acc_dict = {"acc1": torch.zeros(1),
-                "acc5": torch.zeros(1),
-                "acc1_wo": torch.zeros(1),
-                "acc5_wo": torch.zeros(1)}
-    n_all_wo = 0
-    for tube in tubes:
-        output = tube["action_pred"]
-        label = tube["action_label"]
-        label = torch.Tensor(label).to(torch.int64)
-        acc1, acc5 = utils.accuracy(output, label, topk=(1, 5))
-        acc_dict["acc1"] += acc1
-        acc_dict["acc5"] += acc5
-        if (label != n_classes).sum() == 0:
-            n_all_wo += 1
-            continue
-        else:
-            acc1_wo, acc5_wo = utils.accuracy(output[label != n_classes], label[label != n_classes], topk=(1, 5))
-            acc_dict["acc1_wo"] += acc1_wo
-            acc_dict["acc5_wo"] += acc5_wo
-    acc_dict["acc1"] = acc_dict["acc1"] / len(tubes)
-    acc_dict["acc5"] = acc_dict["acc5"] / len(tubes)
-    if len(tubes) != n_all_wo:
-        acc_dict["acc1_wo"] = acc_dict["acc1_wo"] / (len(tubes) - n_all_wo)
-        acc_dict["acc5_wo"] = acc_dict["acc5_wo"] / (len(tubes) - n_all_wo)
-    else:
+    acc1, acc5 = utils.accuracy(output, label, topk=(1, 5))
+    acc_dict["acc1"] = acc1
+    acc_dict["acc5"] = acc5
+    if (label != n_classes).sum() == 0:
         acc_dict["acc1_wo"] = -1
         acc_dict["acc5_wo"] = -1
+    else:
+        acc1_wo, acc5_wo = utils.accuracy(output[label != n_classes], label[label != n_classes], topk=(1, 5))
+        acc_dict["acc1_wo"] = acc1_wo
+        acc_dict["acc5_wo"] = acc5_wo
+
     return acc_dict
 
 

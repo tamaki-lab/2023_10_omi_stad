@@ -11,6 +11,7 @@ import numpy as np
 import cv2
 import yaml
 import av
+from torchvision import transforms
 
 from datasets.utils import xyxy2cxcywh, box_normalize
 
@@ -23,6 +24,7 @@ class VideoDataset(torch.utils.data.Dataset):
             video_name_list = f.readlines()
 
         self.dataset_path = params["dataset_path"]
+        # self.video_name_list = [video.replace("\n", "") for video in video_name_list][25:40]
         self.video_name_list = [video.replace("\n", "") for video in video_name_list]
         self.ano = read_ano(dataset_name, subset, params)
 
@@ -98,7 +100,7 @@ def read_jhmdb_ano(subset, params):
         ano_dict[video_name] = {}
         for i, box in enumerate(json_load["gttubes"][video_name][str(cls_id)][0]):
             ano_dict[video_name][i] = {}
-            ano_dict[video_name][i][0] = box[1:]
+            ano_dict[video_name][i][0] = [int(x) for x in box[1:]]
             ano_dict[video_name][i][0].append(cls_id)
 
     return ano_dict
@@ -121,13 +123,14 @@ class VideoData(torch.utils.data.Dataset):
     loaderにする際にshuffle=Falseにし,取り出すフレーム数はbatch sizeで指定
     """
 
-    def __init__(self, img_paths: list[pathlib.PosixPath], video_ano: dict):
+    def __init__(self, img_paths: list[pathlib.PosixPath], video_ano: dict, resize_size: tuple=(512, 512)):
 
         self.img_paths = img_paths
         self.ano = video_ano
 
         self.org_size = (Image.open(img_paths[0]).height, Image.open(img_paths[0]).width)
-        self.resize_size = (512, 512)
+        self.resize_size = resize_size
+        # self.resize_size = (512, 512)
         self.resize_scale, self.resized_hw = self.get_resize_scale(self.org_size[0], self.org_size[1], self.resize_size[0])
 
     def __len__(self):
@@ -150,7 +153,11 @@ class VideoData(torch.utils.data.Dataset):
             resized_w = resize_size
         return scale, (resized_h, resized_w)
 
-    def transform(self, img):
+    def transform(self, img, is_aug=False):
+        if is_aug:
+            t = transforms.Compose([transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)])
+            img = t(img)
+
         img = np.array(img).astype(np.float32) / 255.0
 
         # resize
