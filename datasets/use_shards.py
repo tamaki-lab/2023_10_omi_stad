@@ -15,6 +15,7 @@ import cv2
 import matplotlib.pyplot as plt
 from PIL import Image
 import av
+from torchvision import transforms
 
 from datasets.utils import info_from_json, xyxy2cxcywh, box_normalize
 
@@ -57,18 +58,20 @@ def make_dataset(
     sampling_rate,
 ):
     dataset_name = shards_url[0].split("/")[-3]
-    if dataset_name in ["UCF101-24", "JHMDB"]:
+    if dataset_name in ["ucf101-24", "jhmdb21"]:
         decoder = trimmed_video_decorder
-        # decoder = video_decorder
-    elif dataset_name == "AVA":
+    elif dataset_name == "ava":
         decoder = untrimmed_video_decorder
     else:
         raise NameError(f"invalide dataset name: {dataset_name}")
+
+    subset = shards_url[0].split("/")[-2]
 
     decode_video = partial(
         decoder,
         num_sample_frame=clip_frames,
         sampling_rate=sampling_rate,
+        subset=subset,
     )
 
     dataset = wds.WebDataset(shards_url)
@@ -99,6 +102,7 @@ def trimmed_video_decorder(
     video_pickle,
     num_sample_frame,
     sampling_rate,
+    subset,
 ):
     nf = num_sample_frame
     sr = sampling_rate
@@ -110,6 +114,11 @@ def trimmed_video_decorder(
     bbox_ano = video_stats["label_bbox"]
 
     clip, frame_indices_list = get_clip(jpg_byte_list, n_frames, nf, sr)
+
+    if subset == "train":
+        t = transforms.Compose([transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)])
+        clip = [t(img) for img in clip]
+
     new_clip, resize_scale, resize_size, org_size = resize(clip)
 
     label = [{} for _ in range(nf)]

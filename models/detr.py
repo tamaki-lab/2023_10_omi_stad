@@ -14,8 +14,7 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 from .position_encoding import PositionEmbeddingSine
 from .backbone import Backbone, Joiner
 from .matcher import HungarianMatcher
-from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
-                           dice_loss, sigmoid_focal_loss)
+from .segmentation import (dice_loss, sigmoid_focal_loss)
 from .transformer import Transformer
 
 
@@ -277,7 +276,7 @@ class PostProcess(nn.Module):
         assert target_sizes.shape[1] == 2
 
         prob = F.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
+        scores, labels = prob[..., :-1].max(-1)  # Exclude "no object"
 
         # convert to [x0, y0, x1, y1] format
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
@@ -334,17 +333,17 @@ def build(args):
         aux_loss=False,
     )
 
-    matcher = HungarianMatcher(cost_class=1, cost_bbox=5, cost_giou=2)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': 5}
-    # weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_giou'] = 2
+    # weight_dict = {'loss_ce': 1, 'loss_bbox': 5, 'loss_giou': 2}
+    weight_dict = {'loss_ce': 2, 'loss_bbox': 5, 'loss_giou': 2}
+    matcher = HungarianMatcher(cost_class=weight_dict["loss_ce"],
+                               cost_bbox=weight_dict['loss_bbox'],
+                               cost_giou=weight_dict["loss_giou"])
 
     losses = ['labels', 'boxes', 'cardinality']
 
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=0.1, losses=losses)
-    # criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-    #                          eos_coef=args.eos_coef, losses=losses)
+
     postprocessors = {'bbox': PostProcess()}
 
     return model, criterion, postprocessors

@@ -37,3 +37,7 @@ label_list:
     "walk",
     "wave",
   ]
+
+# Settings #
+psn_score_th: 0.95
+iou_th: 0.35
