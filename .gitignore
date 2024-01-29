@@ -21,3 +21,4 @@ test_img*
 .flake8
 .pylintrc
 pyproject.toml
+checkpoint/*
