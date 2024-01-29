@@ -279,8 +279,6 @@ def make_video_with_action_pred(video_path, tubes, label_list, video_ano, plot_l
         frame = frame.to_ndarray(format="rgb24")
 
         for tube_idx, tube in enumerate(tubes.tubes):
-            if tube_idx != 0:
-                continue
             frame_indicies = [x[0] for x in tube.query_indicies]
             if frame_idx in frame_indicies:
                 idx = frame_indicies.index(frame_idx)
@@ -295,12 +293,8 @@ def make_video_with_action_pred(video_path, tubes, label_list, video_ano, plot_l
 
                 cv2.rectangle(
                     frame, pt1=(x1, y1), pt2=(x2, y2),
-                    color=color_map[action_id % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                    color=color_map[tube_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
-                # cv2.rectangle(
-                #     frame, pt1=(x1, y1), pt2=(x2, y2),
-                #     color=color_map[tube_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
-                # )
                 cv2.putText(
                     frame, text=f"{label_list[action_id]}, {round(score,2)}, tube idx:{tube_idx}",
                     org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
@@ -357,6 +351,8 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
         frame = frame.to_ndarray(format="rgb24")
 
         for list_idx, (name, tube) in enumerate(tubes):
+            if list_idx != 0:
+                continue
             if frame_idx in tube["boxes"]:
                 box = tube["boxes"][frame_idx]
                 x1, y1, x2, y2 = box
@@ -370,14 +366,18 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
 
                 cv2.rectangle(
                     frame, pt1=(x1, y1), pt2=(x2, y2),
-                    color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                    color=color_map[action_id % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
-                cv2.putText(
-                    frame, text=f"{label_list[action_id]}, {round(score,2)}, idx:{list_idx}",
-                    # frame, text=f"{label_list[action_id]}, score: {round(score,2)}, tube_idx:{list_idx}",
-                    org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
-                    color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
-                )
+                # cv2.rectangle(
+                #     frame, pt1=(x1, y1), pt2=(x2, y2),
+                #     color=color_map[list_idx % 10], thickness=2, lineType=cv2.LINE_4, shift=0,
+                # )
+                # cv2.putText(
+                #     frame, text=f"{label_list[action_id]}, {round(score,2)}, idx:{list_idx}",
+                #     # frame, text=f"{label_list[action_id]}, score: {round(score,2)}, tube_idx:{list_idx}",
+                #     org=(x1, y1), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                #     color=color_map[list_idx % 10], thickness=1, lineType=cv2.LINE_4
+                # )
 
         if (plot_label) and (frame_idx in video_ano):
             for tube_idx, frame_ano in video_ano[frame_idx].items():
@@ -387,11 +387,11 @@ def make_video_with_actiontube(video_path, label_list, tubes, video_ano, plot_la
                     frame, pt1=(x1, y1), pt2=(x2, y2),
                     color=(0, 0, 0), thickness=2, lineType=cv2.LINE_4, shift=0,
                 )
-                cv2.putText(
-                    frame, text=f"{label_list[action_id]}", org=(x1+5, y1+10),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
-                    color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
-                )
+                # cv2.putText(
+                #     frame, text=f"{label_list[action_id]}", org=(x1+5, y1+10),
+                #     fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3,
+                #     color=(0, 0, 0), thickness=1, lineType=cv2.LINE_4
+                # )
 
         frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
         for packet in new_stream.encode(frame):
