@@ -115,23 +115,6 @@ def main(args, params):
     for video_idx, tubes in pbar_vtubes:
         pred_v_tubes = []
 
-        v_list = ["v_Basketball_g01_c02",
-                  "v_Basketball_g01_c04",
-                  "v_Basketball_g01_c05",
-                  "v_Basketball_g01_c06",
-                  "v_Basketball_g01_c07",
-                  "v_Basketball_g02_c06",
-                  "v_Basketball_g03_c01",
-                  "v_Basketball_g03_c05",
-                  "v_Basketball_g04_c01",
-                  "v_Basketball_g04_c02",
-                  "v_Basketball_g04_c03",
-                  "v_Basketball_g05_c03",
-                  "v_Basketball_g07_c01"]
-        v_list = ["v_Basketball_g07_c01"]
-        if tubes.video_name.split("/")[1] not in v_list:
-            continue
-
         for tube in tubes.tubes:
             video_names.add(tube.video_name)
             decoded_queries = torch.stack(tube.decoded_queries).to(device)
@@ -155,10 +138,11 @@ def main(args, params):
             pred_v_tubes.extend(action_tubes)
         pred_tubes.extend(pred_v_tubes)
 
-        video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
-        make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano, True)
-        make_video_with_actiontube(video_path, params["label_list"], pred_v_tubes, tubes.ano, plot_label=True)
-        continue
+        # plot
+        # video_path = osp.join(params["dataset_path_video"], tubes.video_name + ".avi")
+        # make_video_with_action_pred(video_path, tubes, params["label_list"], tubes.ano, True)
+        # make_video_with_actiontube(video_path, params["label_list"], pred_v_tubes, tubes.ano, plot_label=True)
+        # continue
 
     print(f"num of pred tubes: {len(pred_tubes)}")
     pred_tubes = [tube for tube in pred_tubes if tube[1]["class"] != params["num_classes"]]
