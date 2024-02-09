@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import yaml
-# from PIL import Image
 
 from datasets.dataset import VideoDataset
 import util.misc as utils
@@ -20,7 +19,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # setting #
-    parser.add_argument('--n_epochs', default=20, type=int)
+    parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--head_name', default='head_test', type=str)
     parser.add_argument('--link_cues', default='feature', type=str)
@@ -120,11 +119,11 @@ def main(args, params):
     }
     ex.log_parameters(hyper_params)
 
-    pbar_epoch = tqdm(range(1, args.n_epochs + 1), leave=False)
+    pbar_epoch = tqdm(range(1, args.epochs + 1), leave=False)
     for epoch in pbar_epoch:
         pbar_epoch.set_description(f"[Epoch {epoch}]")
 
-        ## Training ##
+        # Training #
         action_head.train()
         step = len(train_loader) * (epoch - 1)
 
@@ -176,7 +175,7 @@ def main(args, params):
 
         leave_ex(ex, "train", train_log, epoch)
 
-        # validation
+        # validation #
         with torch.inference_mode():
             action_head.eval()
 

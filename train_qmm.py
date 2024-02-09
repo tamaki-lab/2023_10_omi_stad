@@ -294,6 +294,8 @@ def leave_ex(ex, subset, log, epoch):
 
 @torch.no_grad()
 def diff_detr_head(args):
+    """ 学習したDETRとオリジナルのDETRの予測の違いを可視化 """
+
     device = torch.device(f"cuda:{args.device}")
 
     # fix the seed for reproducibility
@@ -317,7 +319,6 @@ def diff_detr_head(args):
 
     org_pretrain_path = "checkpoint/detr/" + utils.get_pretrain_path(args.backbone, args.dilation)
     org_detr.load_state_dict(torch.load(org_pretrain_path)["model"])
-    # pretrain_path = "checkpoint/ucf101-24/test/detr/epoch_50.pth"
     pretrain_path = "checkpoint/ucf101-24/w:252/detr/epoch_20.pth"
     detr.load_state_dict(torch.load(pretrain_path))
 

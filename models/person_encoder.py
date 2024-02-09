@@ -1,12 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_metric_learning import (
-    miners,
-    losses,
-    reducers,
-    distances,
-)
 import statistics
 import numpy as np
 
@@ -204,14 +198,5 @@ def val_same_person_lists(same_person_lists):
     diff_person_score = statistics.mean(log["n_diff_id"])  # Preferably close to 1
     same_person_score = statistics.mean([v for k, v in log["n_included_list"].items()])  # Preferably close to 1
     total_score = 1 - (((1 - diff_person_score) + (1 - same_person_score)) / 2)  # Preferably close to 1
-
-    # [print(person_list["target_id"]) for person_list in same_person_lists]
-    # print(log["n_lists"])
-    # print(log["n_diff_id"])
-    # print(log["n_included_list"])
-    # print(diff_person_score)
-    # print(same_person_score)
-    # print(total_score)
-    # print("")
 
     return diff_person_score, same_person_score, total_score

@@ -1,4 +1,3 @@
-
 import argparse
 import random
 from tqdm import tqdm
@@ -41,7 +40,6 @@ def get_args_parser():
     parser.add_argument('--sim_th', default=0.5, type=float)
     parser.add_argument('--tiou_th', default=0.2, type=float)
     parser.add_argument('--filter_length', default=8, type=int)
-    # parser.add_argument('--iou_th', default=0.3, type=float)
     parser.add_argument('--topk', default=1, type=int)
 
     # Backbone

@@ -330,8 +330,8 @@ if __name__ == '__main__':
     params = yaml.safe_load(open(f"datasets/projects/{args.dataset}.yml"))
     params["label_list"].append("no action")
 
-    # main(args, params)
-    # exit()
+    main(args, params)
+    exit()
 
     # load qmm outputs #
     id = 0  # 0-> calc precision and recall, 1-> visualization

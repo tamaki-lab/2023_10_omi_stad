@@ -1,14 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import math
-import torchinfo
-from transformers import VivitConfig, VivitModel, VivitForVideoClassification
-import numpy as np
 
 
 class ActionHead(nn.Module):
-    def __init__(self, in_d: int=256, n_layers: int=2, n_classes: int=24, pos_ecd: tuple=(True, "cat", 32)):
+    def __init__(self, in_d: int = 256, n_layers: int = 2, n_classes: int = 24, pos_ecd: tuple = (True, "cat", 32)):
         super().__init__()
         self.use_pos_ecd = pos_ecd[0]
         if pos_ecd[0]:
@@ -38,8 +34,8 @@ class PositionalEncoding(nn.Module):
     Changed to assume online (batch size=1) instead of batch
     """
 
-    # def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 100):  # JHMDB
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 800.0):  # UCF101-24
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 100):  # JHMDB
+    # def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, ecd_type: str = "cat", cycle: float = 800.0):  # UCF101-24
         super().__init__()
         self.ecd_type = ecd_type
 
@@ -68,6 +64,7 @@ class PositionalEncoding(nn.Module):
                 x = x + self.pe[:x.size(0)]
         return self.dropout(x)
 
+
 class Extractor(nn.Module):
     def __init__(self):
         super().__init__()
@@ -82,22 +79,8 @@ class Extractor(nn.Module):
         return x
 
 
-# class Extractor2(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.conv = nn.Conv2d(2048, )
-#         self.dropout = nn.Dropout(p=0.1)
-#         self.mlp = nn.Linear(2048, 256)
-
-#     def forward(self, x):
-#         x = self.avgpool(x)
-#         x = x.reshape(-1, 2048)
-#         x = self.mlp(self.dropout(x))
-#         return x
-
-
 class ActionHead2(nn.Module):
-    def __init__(self, in_d: int=256, n_layers: int=2, n_classes: int=24, pos_ecd: tuple=(True, "cat", 32)):
+    def __init__(self, in_d: int = 256, n_layers: int = 2, n_classes: int = 24, pos_ecd: tuple = (True, "cat", 32)):
         super().__init__()
         self.extractor = Extractor()
         self.use_pos_ecd = pos_ecd[0]
@@ -125,6 +108,7 @@ class ActionHead2(nn.Module):
         x = self.head(self.dropout(x))
         return x
 
+
 class X3D_XS(nn.Module):
     def __init__(self):
         super().__init__()
@@ -133,37 +117,8 @@ class X3D_XS(nn.Module):
         self.blocks.append(model.blocks[5].pool)
         self.avgpool = nn.AdaptiveAvgPool3d(1)
 
-
     def forward(self, x):
         for f in self.blocks:
             x = f(x)
         x = x.reshape(-1, 2048, 2, 2)
-        # x = self.avgpool(x).reshape(-1, 2048)
         return x
-
-if __name__ == "__main__":
-    model = X3D_XS()
-    # model = torch.hub.load('facebookresearch/pytorchvideo', "x3d_xs", pretrained=True)
-    # model = VivitForVideoClassification.from_pretrained("google/vivit-b-16x2-kinetics400")
-    # model = VivitForVideoClassification.from_pretrained("google/vivit-b-16x2-kinetics400").vivit
-    # print(model)
-    # exit()
-
-    torchinfo.summary(
-        model=model,
-        # input_size=(1, 32, 3, 224, 224),  # ViViT
-        input_size=(1, 3, 4, 182, 182),  # x3d-xs
-        depth=3,
-        col_names=["input_size",
-                   "output_size"],
-        row_settings=("var_names",))
-
-    # for param in model.parameters():
-    #     param.requires_grad = True
-
-    # parameters = filter(lambda p: p.requires_grad, model.parameters())
-    # parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
-    # print('Trainable Parameters: %.3fM' % parameters)
-
-    # print(model)
-    # print(sum(p.numel() for p in model.parameters() if p.requires_grad))
