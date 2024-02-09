@@ -70,7 +70,9 @@ python train_qmm.py
 <br>
 
 人物特徴抽出器 $f_p$ の評価．
+
 真値tubeの領域のみに対するRecallを求める（3DIoUの計算はラベルのあるフレームのみで行う）．
+
 同時にAction Headの学習のためにアクションラベルを付与した同一人物クエリをtarファイルに保存．
 
 ```bash
