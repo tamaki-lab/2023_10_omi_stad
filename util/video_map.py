@@ -1,7 +1,6 @@
 from typing import Tuple, Dict
 import torch
 import numpy as np
-import torch
 
 from util.box_ops import tube_iou, get_motion_ctg
 

@@ -20,13 +20,12 @@ import torch.distributed as dist
 from torch import Tensor
 import copy
 import tarfile
-import pickle
 import random
 from PIL import Image
 
 from datasets.dataset import VideoData
 import util.misc as utils
-from util.box_ops import generalized_box_iou
+
 
 # needed due to empty tensor bug in pytorch and torchvision 0.5
 import torchvision
@@ -67,9 +66,6 @@ def write_tar(object: list, dir: str, file_name: str = "test"):
                 pickle.dump(element, f)
             tar.add(f'element{i}.pkl')
             os.remove(f'element{i}.pkl')
-
-    # for i in range(len(object)):
-    #     os.remove(f'element{i}.pkl')
 
 
 class TarIterator:
@@ -113,8 +109,6 @@ def save_checkpoint(model, check_dir, ex_name, epoch):
     file_name = f"epoch_{epoch}.pth"
     file_path = osp.join(dir_name, file_name)
     os.makedirs(dir_name, exist_ok=True)
-    # if not os.path.exists(dir_name):
-    #     os.makedirs(dir_name)
     torch.save(model.state_dict(), file_path)
 
 

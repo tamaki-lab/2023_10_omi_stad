@@ -1,12 +1,10 @@
 from typing import Tuple, Dict
-import pathlib
 import torch
 from pathlib import Path
 import os.path as osp
 import pandas as pd
 from tqdm import tqdm
 import av
-import yaml
 import json
 import os
 
@@ -110,10 +108,10 @@ def make_gt_tubes_ava(subset: str, params: Dict) -> Dict[str, list[Dict]]:
         cls_id = action_id2id[cls_id]
         width = video_scale[video_name][0]
         height = video_scale[video_name][1]
-        # resize_scale = max([width, height]) / 512
+        resize_scale = max([width, height]) / 512
 
-        # x1, y1, x2, y2 = x1 * resize_scale, y1 * resize_scale, x2 * resize_scale, y2 * resize_scale # predのスケールにアノテーション合わせる
-        x1, y1, x2, y2 = int(x1 * width), int(y1 * height), int(x2 * width), int(y2 * height)  # predのスケールを合わせる前提
+        x1, y1, x2, y2 = int(x1 * resize_scale), int(y1 * resize_scale), int(x2 * resize_scale), int(y2 * resize_scale) # predのスケールにアノテーションを合わせる
+        x1, y1, x2, y2 = int(x1 * width), int(y1 * height), int(x2 * width), int(y2 * height)  # predのスケールをアノテーションに合わせる
 
         # 同一人物かつ同一行動を確認するためのキー
         key_name = str(psn_id) + "-" + str(cls_id)
@@ -175,20 +173,3 @@ def make_gt_tubes(dataset: str, subset: str, params: Dict) -> Dict[str, list[Dic
         return make_gt_tubes_ava(subset, params)
     else:
         raise NameError(f"Invalide dataset name: {dataset}")
-
-
-# if __name__ == "__main__":
-    ### print debug ###
-
-    # dataset = "ucf101-24"
-    # dataset = "jhmdb21"
-    # params = yaml.safe_load(open(f"../datasets/projects/{dataset}.yml"))
-    # gt_tubes = make_gt_tubes(dataset, "val", params)
-
-    # video_idx = 2
-    # video_name = sorted(list(gt_tubes.keys()))[video_idx]
-    # print(video_name)
-    # print(f'num of tubes: {len(gt_tubes[video_name])}')
-    # print(f'cls_id: {gt_tubes[video_name][0]["class"]}')
-    # print(f'boxes: {gt_tubes[video_name][0]["boxes"]}')
-    # print(sum([len(tubes_in_video) for _, tubes_in_video in gt_tubes.items()]))

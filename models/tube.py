@@ -1,4 +1,3 @@
-from typing import Tuple
 import torch
 import numpy as np
 from util.box_ops import generalized_box_iou
@@ -39,8 +38,6 @@ class ActionTubes:
                 else:
                     self.tubes.append(ActionTube(self.video_name))
                     self.tubes[-1].link((frame_idx, query_idx), d_queries[i], p_queries[i], psn_boxes[i])
-
-
 
     def sim_scores(self, tubes, p_embedding):
         final_queries = torch.stack([tube.psn_embeddings[-1] for tube in tubes])
