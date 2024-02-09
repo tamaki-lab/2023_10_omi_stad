@@ -2,7 +2,7 @@
 
 <!-- # (Action tube generation by person query matching for spatio-temporal action detection) -->
 
-<!-- ![overview_1-crop.pdf](https://github.com/tamaki-lab/2023_10_omi_stad/files/14218198/overview_1-crop.pdf) -->
+![overview_1-crop.pdf](https://github.com/tamaki-lab/2023_10_omi_stad/files/14218198/overview_1-crop.pdf)
 
 ## 準備
 
