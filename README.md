@@ -2,6 +2,8 @@
 
 # (Action tube generation by person query matching for spatio-temporal action detection)
 
+![overview_1-crop.pdf](https://github.com/tamaki-lab/2023_10_omi_stad/files/14218198/overview_1-crop.pdf)
+
 ## コード
 
 - datasets/dataset.py: データセットを読み込むためのファイル．動画をシーケンスに読み込む．評価時などに用いる．
