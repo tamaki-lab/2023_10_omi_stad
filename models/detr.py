@@ -14,7 +14,6 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 from .position_encoding import PositionEmbeddingSine
 from .backbone import Backbone, Joiner
 from .matcher import HungarianMatcher
-from .segmentation import (dice_loss, sigmoid_focal_loss)
 from .transformer import Transformer
 
 

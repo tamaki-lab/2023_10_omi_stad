@@ -19,7 +19,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
 
     # setting #
-    parser.add_argument('--epochs', default=25, type=int)
+    parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--ex_name', default='test', type=str)
     # loader

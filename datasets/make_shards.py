@@ -108,9 +108,8 @@ def make_shards(args, params):
     MyManager.register("Sink", MyShardWriter)
 
     with MyManager() as my_manager, Manager() as manager:
-        #
+
         # prepare manager objects
-        #
         q = manager.Queue()
         lock = manager.Lock()
         pbar = my_manager.Tqdm(
@@ -124,9 +123,7 @@ def make_shards(args, params):
             maxcount=args.max_count,
         )
 
-        #
         # start workers
-        #
         p_all = [
             Process(
                 target=worker,
@@ -141,9 +138,7 @@ def make_shards(args, params):
         for _ in range(args.num_workers):
             q.put(None)
 
-        #
         # wait workers, then close
-        #
         [p.join() for p in p_all]
         [p.close() for p in p_all]
 

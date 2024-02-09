@@ -7,7 +7,6 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import av
-from pathlib import Path
 
 from .box_ops import box_unnormalize, box_cxcywh_to_xyxy
 

@@ -10,7 +10,6 @@ from PIL import Image
 import numpy as np
 import cv2
 import yaml
-import av
 from torchvision import transforms
 
 from datasets.utils import xyxy2cxcywh, box_normalize
@@ -24,7 +23,6 @@ class VideoDataset(torch.utils.data.Dataset):
             video_name_list = f.readlines()
 
         self.dataset_path = params["dataset_path"]
-        # self.video_name_list = [video.replace("\n", "") for video in video_name_list][25:40]
         self.video_name_list = [video.replace("\n", "") for video in video_name_list]
         self.ano = read_ano(dataset_name, subset, params)
 
@@ -130,7 +128,6 @@ class VideoData(torch.utils.data.Dataset):
 
         self.org_size = (Image.open(img_paths[0]).height, Image.open(img_paths[0]).width)
         self.resize_size = resize_size
-        # self.resize_size = (512, 512)
         self.resize_scale, self.resized_hw = self.get_resize_scale(self.org_size[0], self.org_size[1], self.resize_size[0])
 
     def __len__(self):
@@ -182,7 +179,7 @@ class VideoData(torch.utils.data.Dataset):
         if frame_idx in self.ano:
             frame_ano = self.ano[frame_idx]
             for obj_id, one_bbox_ano in frame_ano.items():
-                annotation = np.zeros((1, 6))  # [x,y,x,y,class_id, person_id]
+                annotation = np.zeros((1, 6))  # [x,y,x,y,class_id,person_id]
                 annotation[0, :5] = one_bbox_ano
                 annotation[0, :4] *= self.resize_scale
                 annotation[0, :4] = xyxy2cxcywh(annotation[0, :4])
